@@ -16,7 +16,7 @@ The trackpad supports slide-to-move, tap-to-click, hold-and-slide dragging, two-
 
 A separate external scene is required for the display to show the desktop while the phone shows independent controls. If iOS supplies plain mirroring, both screens show the same view. Receiver compatibility, latency and resolution depend on the platform and connection; Miracast-only receivers are unsupported. The supplied external-display photo demonstrates the workflow, not qualification of every receiver.
 
-**Desktop → Desktop Settings… → Display** provides Fit, Actual Size, Full Screen, external-output status and **Resolution & Viewer Preferences**. Scaling changes immediately; guest resolution changes apply on the next desktop start. Save work before restarting. The default is landscape 960 × 540. Reported iOS screen modes/maximum refresh are host capabilities, not measured Linux FPS. LinuxRunner displays one Linux output rather than an extended multi-monitor guest desktop.
+**Desktop → Desktop Settings… → Display** provides Fit, Actual Size, Full Screen, external-output status and **Display & Gestures**. Scaling changes immediately; guest resolution changes apply on the next desktop start. Save work before restarting. The default is landscape 960 × 540. Reported iOS screen modes/maximum refresh are host capabilities, not measured Linux FPS. LinuxRunner displays one Linux output rather than an extended multi-monitor guest desktop.
 
 **Done** detaches the viewer while retaining the session. iOS suspension/termination still applies. Reconnect rather than creating another desktop if the original is alive. [Desktop controls](DESKTOP_CONTROLS.md)
 

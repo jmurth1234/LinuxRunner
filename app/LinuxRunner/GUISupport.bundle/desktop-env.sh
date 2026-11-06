@@ -15,7 +15,7 @@ _lr_desktop_read() {
         case "$_lr_line" in
             DISPLAY=:*) _lr_n=${_lr_v#:}; case "$_lr_n" in ''|*[!0-9]*) return 1;; esac; _lr_d=$_lr_v;;
             XAUTHORITY=/home/mobile/Downloads/.linuxrunner/gui/session-*/authority|XAUTHORITY=/home/mobile/Downloads/.linuxrunner/gui/session-*/xwayland-authority) _lr_x=$_lr_v;;
-            XDG_RUNTIME_DIR=/tmp/lr-runtime.*) _lr_r=$_lr_v;;
+            XDG_RUNTIME_DIR=/tmp/lr-runtime.*|XDG_RUNTIME_DIR=/tmp/lrh-*|XDG_RUNTIME_DIR=/tmp/lrw-*) _lr_r=$_lr_v;;
             DBUS_SESSION_BUS_ADDRESS=unix:*) _lr_b=$_lr_v;;
             WAYLAND_DISPLAY=/tmp/lrh-*/wayland-*|WAYLAND_DISPLAY=/tmp/lrw-*/wayland-*|WAYLAND_DISPLAY=/tmp/lr-runtime.*/wayland-*) _lr_w=$_lr_v;;
             *) return 1;;
@@ -35,15 +35,17 @@ linuxrunner_desktop() {
     fi
     if [ -z "$_lr_found" ]; then
         [ "${1:-}" = --quiet ] || echo 'LinuxRunner desktop is not running for this account; open it with Open Desktop in the LinuxRunner app.'
-        unset _lr_d _lr_x _lr_r _lr_b _lr_v _lr_n _lr_line _lr_f _lr_found
+        unset _lr_d _lr_x _lr_r _lr_b _lr_w _lr_v _lr_n _lr_line _lr_f _lr_found
         return 1
     fi
     export DISPLAY="$_lr_d" XAUTHORITY="$_lr_x" XDG_SESSION_TYPE=x11
-    export QT_QPA_PLATFORM=${QT_QPA_PLATFORM:-xcb} QT_FORCE_STDERR_LOGGING=${QT_FORCE_STDERR_LOGGING:-1}
+    # Clear compositor settings from an earlier desktop before adopting X11.
+    unset WAYLAND_DISPLAY MOZ_ENABLE_WAYLAND ELECTRON_OZONE_PLATFORM_HINT
+    export QT_QPA_PLATFORM=xcb GDK_BACKEND=x11 QT_FORCE_STDERR_LOGGING=${QT_FORCE_STDERR_LOGGING:-1}
     if [ "$(id -u)" != 0 ]; then
         if [ -n "$_lr_r" ] && [ -d "$_lr_r" ] && [ -O "$_lr_r" ]; then export XDG_RUNTIME_DIR="$_lr_r"; fi
         [ -z "$_lr_b" ] || export DBUS_SESSION_BUS_ADDRESS="$_lr_b"
-        _lr_wayland "$_lr_w"
+        _lr_wayland "$_lr_w" || true
     fi
     [ "${1:-}" = --quiet ] || echo "LinuxRunner desktop: DISPLAY=$DISPLAY; graphical programs started here open on the desktop."
     unset _lr_d _lr_x _lr_r _lr_b _lr_w _lr_v _lr_n _lr_line _lr_f _lr_found
@@ -54,6 +56,8 @@ linuxrunner_desktop() {
 # X11-only programs keep DISPLAY. Only the desktop user's own live socket.
 _lr_wayland() {
     [ -n "$1" ] && [ -S "$1" ] && [ -O "${1%/*}" ] || return 1
+    if [ -n "$_lr_r" ] && [ -d "$_lr_r" ] && [ -O "$_lr_r" ] && [ ! -L "$_lr_r" ]; then export XDG_RUNTIME_DIR="$_lr_r"; fi
+    [ -z "$_lr_b" ] || export DBUS_SESSION_BUS_ADDRESS="$_lr_b"
     export WAYLAND_DISPLAY="$1" XDG_SESSION_TYPE=wayland MOZ_ENABLE_WAYLAND=1 ELECTRON_OZONE_PLATFORM_HINT=auto
     export QT_QPA_PLATFORM="wayland;xcb" GDK_BACKEND="wayland,x11"
     # The desktop composites on the GPU (virtio-gpu card); programs render with

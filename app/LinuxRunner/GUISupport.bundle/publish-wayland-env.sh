@@ -5,7 +5,7 @@ session=${LR_DESKTOP_SESSION:-}
 case "$session" in /home/mobile/Downloads/.linuxrunner/gui/session-????????-????-????-????-????????????) ;; *) exit 1;; esac
 socket=${1:-${WAYLAND_DISPLAY:-}}
 case "$socket" in /*) ;; *) socket="${XDG_RUNTIME_DIR:-}/$socket";; esac
-[ -S "$socket" ] || exit 1
+[ -S "$socket" ] && [ -O "${socket%/*}" ] && [ ! -L "${socket%/*}" ] || exit 1
 env_file="$HOME/.cache/linuxrunner/desktop.env"
 [ -f "$env_file" ] && [ ! -L "$env_file" ] || exit 0
 lock="$session/environment.lock"
@@ -15,6 +15,7 @@ until mkdir "$lock" 2>/dev/null; do
     i=$((i+1)); [ "$i" -lt 100 ] || exit 1; sleep .02
 done
 trap 'rmdir "$lock" 2>/dev/null || true' EXIT
+[ ! -e "$session/stop" ] || exit 0
 # An older compositor must not replace a newer session's environment.
 auth=$(sed -n 's/^XAUTHORITY=//p' "$env_file")
 case "$auth" in "$session/authority"|"$session/xwayland-authority") ;; *) exit 0;; esac
@@ -38,8 +39,8 @@ if [ "$#" = 0 ] && valid_display "${DISPLAY:-}" && [ "$DISPLAY" != "$auxiliary" 
     auth="$session/xwayland-authority"
 fi
 temporary="$env_file.$$.new"
-{ grep -Ev '^(DISPLAY|XAUTHORITY|WAYLAND_DISPLAY)=' "$env_file" || true
-  printf 'DISPLAY=%s\nXAUTHORITY=%s\nWAYLAND_DISPLAY=%s\n' "$display" "$auth" "$socket"
+{ grep -Ev '^(DISPLAY|XAUTHORITY|WAYLAND_DISPLAY|XDG_RUNTIME_DIR)=' "$env_file" || true
+  printf 'DISPLAY=%s\nXAUTHORITY=%s\nWAYLAND_DISPLAY=%s\nXDG_RUNTIME_DIR=%s\n' "$display" "$auth" "$socket" "${socket%/*}"
 } > "$temporary"
 chmod 600 "$temporary"
 mv "$temporary" "$env_file"

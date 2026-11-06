@@ -1537,10 +1537,16 @@ static NSString *DesktopDegradedNotice(NSString *state){
 - (NSDictionary *)desktopSessionSummary {
     BOOL alive=_desktopMode&&_sessionTerminal.sessionPid>0;
     NSString *state=alive?@"Starting":@"Stopped";
-    if(alive){NSString *readiness=[NSString stringWithContentsOfURL:[_sessionURL URLByAppendingPathComponent:@"desktop-state"] encoding:NSUTF8StringEncoding error:nil];
+    NSString *readiness=alive?LRDiagnosticTailString(LRReadDiagnosticTail([_sessionURL URLByAppendingPathComponent:@"desktop-state"],8192)):@"";
+    if(alive){
         if([readiness containsString:@"ready=1"])state=_desktopPainted?(DesktopDegradedNotice(readiness)?@"Ready (degraded)":@"Ready"):@"Components ready; waiting for paint";}
+    NSString *environment=@"Not reported";
+    for(NSString *line in [readiness componentsSeparatedByString:@"\n"])if([line hasPrefix:@"environment="])environment=[line substringFromIndex:12];
+    BOOL wayland=[environment isEqual:@"wayfire"]||[environment isEqual:@"hyprland"];
+    NSString *server=alive?([environment isEqual:@"Not reported"]?@"Starting":(wayland?@"Wayland / Xwayland":@"X11 / Xvfb")):@"No running display";
+    NSString *transport=_client?([_client isKindOfClass:LRKMSClient.class]?@"Direct KMS":@"VNC"):@"Viewer detached";
     NSString *geometry=_sessionURL?[NSString stringWithContentsOfURL:[_sessionURL URLByAppendingPathComponent:@"geometry"] encoding:NSUTF8StringEncoding error:nil]:nil;
-    return @{@"state":state,@"alive":@(alive),@"connected":@(_client!=nil),@"geometry":geometry?:@"",@"user":_sessionGuestUser?:@"unknown",@"selectedUser":LRRuntimeBridge.defaultLinuxUser,@"root":LRRuntimeBridge.activeRootName,@"audio":[self audioSummary]};
+    return @{@"state":state,@"alive":@(alive),@"connected":@(_client!=nil),@"geometry":geometry?:@"",@"user":_sessionGuestUser?:@"unknown",@"selectedUser":LRRuntimeBridge.defaultLinuxUser,@"root":LRRuntimeBridge.activeRootName,@"audio":[self audioSummary],@"desktopEnvironment":environment,@"displayServer":server,@"transport":transport};
 }
 // "Fit" desktop size: the window's shape in points (iPad windows, Stage Manager,
 // split view and external displays included), scaled up to at least 540 pixels
@@ -1779,11 +1785,6 @@ static NSString *DesktopDegradedNotice(NSString *state){
     state[@"screenMaximumRefresh"]=screen?@(screen.maximumFramesPerSecond):@0;
     NSMutableSet *modes=[NSMutableSet new];for(UIScreenMode *mode in screen.availableModes)[modes addObject:[NSString stringWithFormat:@"%.0f × %.0f",mode.size.width,mode.size.height]];
     state[@"screenModes"]=[[modes allObjects] sortedArrayUsingSelector:@selector(compare:)];
-    state[@"displayServer"]=[state[@"alive"] boolValue]?@"X11 / Xvfb":@"No running display";
-    NSString *readiness=LRDiagnosticTailString(LRReadDiagnosticTail([_sessionURL URLByAppendingPathComponent:@"desktop-state"],8192));
-    NSString *environment=@"Not reported";
-    for(NSString *line in [readiness componentsSeparatedByString:@"\n"])if([line hasPrefix:@"environment="])environment=[line substringFromIndex:12];
-    state[@"desktopEnvironment"]=environment;
     state[@"statusDetail"]=_status.text?:@"";
     return state;
 }

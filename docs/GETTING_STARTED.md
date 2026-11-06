@@ -91,7 +91,7 @@ The architecture is normally reported as `aarch64`. Linux version/CPU informatio
 
 A desktop is optional for terminal use. In the assistant's **Desktop** stage, choose **Install Desktop Components**. This adds the display server, window manager, panel, file manager and available sound support using the distribution's packages. Account tools and desktop packages may need network access even with bundled Alpine.
 
-The setup desktop uses lightweight Openbox components (LXQt Panel/PCManFM-Qt on Arch). For another desktop, open **Settings → Desktop Environment**, use **Install LXQt**, **Install Enlightenment**, **Install Wayfire**, **Install Hyprland** or **Install KDE Plasma** where available, then select it in the **Desktop** picker under **Open Desktop Starts**. Stop an existing desktop before switching. Hyprland is experimental, Arch-only and requires at least 8 GB RAM; Metal is recommended. Enlightenment is disabled on Debian and Arch Plasma remains unvalidated.
+The setup desktop uses lightweight Openbox components (LXQt Panel/PCManFM-Qt on Arch). For another desktop, open **Settings → Desktop Environment**, select **Install** beside an available desktop in **Desktop Components**. A successful installation selects that desktop. Use the **Desktop** picker under **Next Desktop Start** to select an installed desktop. Stop an existing desktop before switching. Hyprland is experimental, Arch-only and requires at least 8 GB RAM; Metal is recommended. Enlightenment is disabled on Debian and Arch Plasma remains unvalidated.
 
 When components are installed, choose **Continue**. **Home → Open Desktop** can also install missing desktop support automatically. Alpine's desktop path is experimental; use its terminal if graphical packages fail.
 
@@ -108,7 +108,7 @@ Choose **Open Desktop** at the end of setup or on Home. A running session may in
 | Keyboard button and modifier bar | Show the on-screen keyboard; send Esc, Tab, Shift, Ctrl, Alt and Super. |
 | Hardware keyboard / supported mouse or trackpad | Forward the input delivered by iOS/iPadOS. Behavior depends on the accessory and platform settings. |
 | **Desktop → Desktop Settings… → Display → Fit** / **Actual Size** | Change viewer scaling. |
-| **Desktop Settings… → Display → Resolution & Viewer Preferences** | Select a window-sized Linux resolution for the next session start. |
+| **Desktop Settings… → Display → Display & Gestures** | Select a window-sized Linux resolution for the next session start. |
 | **Done** | Return to LinuxRunner while retaining the current desktop session. |
 | **Sessions → Resume Desktop** | Reattach to a live session. |
 | **Stop Desktop** | End the desktop and its applications; save documents first. |

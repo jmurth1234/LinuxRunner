@@ -54,7 +54,7 @@
     },
     {
       "name": "desktop-env.sh",
-      "sha256": "cd168ebdc89c54fe1a909235030be2064e46c3d5342ea1316838290a04b88bb9",
+      "sha256": "edde4ee2ca4f83be275433d47acd28f0f59f89f040b272a78715c33b7666f776",
       "mode": "0755"
     },
     {
@@ -399,7 +399,7 @@
     },
     {
       "name": "publish-wayland-env.sh",
-      "sha256": "d6108031123876deb64bb0a1b5c5c0eaffb37c0e32f848df2e5a14306977b059",
+      "sha256": "cb18085107d23e84e5842c93d1c5869839e87aedfa397c875eafeba1e81d936b",
       "mode": "0755"
     },
     {

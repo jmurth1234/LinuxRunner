@@ -403,7 +403,7 @@ struct ManagerView: View {
         .accentColor(Color(red: 0.36, green: 0.68, blue: 0.98))
         .preferredColorScheme(appearance == "system" ? nil : appearance == "light" ? .light : .dark)
         .onAppear {
-            desktopSummary = LRRuntimeBridge.desktopSessionSummary()
+            refreshDesktopSummary()
             // First launch without Linux, or setup waiting for its relaunch/account step.
             // Once per launch, so "Later" is respected.
             // Only when there is no Linux at all, or a setup the user started is
@@ -420,10 +420,10 @@ struct ManagerView: View {
         .fullScreenCover(isPresented: $setup, onDismiss: { if desktopAfterSetup { desktopAfterSetup = false; openDesktop() } }) {
             SetupWizardView(manager: manager, openDesktop: { desktopAfterSetup = true })
         }
-        .onReceive(sessionTimer) { _ in if phase == .active { desktopSummary = LRRuntimeBridge.desktopSessionSummary() } }
+        .onReceive(sessionTimer) { _ in if phase == .active { refreshDesktopSummary() } }
         .alert("Stop Desktop?", isPresented: $confirmStopDesktop) {
             Button("Cancel", role: .cancel) { }
-            Button("Stop", role: .destructive) { LRRuntimeBridge.stopDesktopSession(); desktopSummary = LRRuntimeBridge.desktopSessionSummary() }
+            Button("Stop", role: .destructive) { LRRuntimeBridge.stopDesktopSession(); refreshDesktopSummary() }
         } message: { Text("Save documents first. This closes applications owned by the desktop; persistent files and the terminal environment remain.") }
         .fullScreenCover(item: $graphical) { request in NativeController(controller: presentedController(request)) }
         .sheet(isPresented: $diagnostics) { DeveloperDiagnosticsView() }
@@ -466,6 +466,12 @@ struct ManagerView: View {
     private func statusRow(_ title: String, systemImage: String, value: String, color: Color) -> some View {
         HStack { Label(title, systemImage: systemImage); Spacer(); Text(value).font(.callout).foregroundColor(color).lineLimit(1) }
     }
+    private func refreshDesktopSummary() {
+        var latest = LRRuntimeBridge.desktopSessionSummary()
+        // Audio counters have their own settings view. They must not refresh every tab.
+        latest.removeValue(forKey: "audio")
+        if !NSDictionary(dictionary: desktopSummary).isEqual(to: latest) { desktopSummary = latest }
+    }
     private var desktopAlive: Bool { desktopSummary["alive"] as? Bool == true }
     private var recentApplications: [LinuxApplication] {
         let keys = UserDefaults.standard.stringArray(forKey: "LinuxRunner.launcher." + LRRuntimeBridge.activeRootName() + ".recent") ?? []
@@ -499,7 +505,7 @@ struct ManagerView: View {
                 manager.error = "Runtime initialization failed (\(result)). " + LRRuntimeBridge.runtimeStatus()
             }
             startingRuntime = false
-            desktopSummary = LRRuntimeBridge.desktopSessionSummary()
+            refreshDesktopSummary()
             manager.refresh()
         }
     }
@@ -587,6 +593,8 @@ struct ManagerView: View {
                         if user == "root" { Text("This session runs as root. Applications that require a normal user will refuse to start. Choose a Linux user in Settings, then start a new desktop.").font(.footnote).foregroundColor(.orange) }
                     }
                     if let geometry = desktopSummary["geometry"] as? String { Text("Display: " + geometry).font(.caption).foregroundColor(.secondary) }
+                    if let server = desktopSummary["displayServer"] as? String { LabeledContentRow("Display server", value: server) }
+                    if let transport = desktopSummary["transport"] as? String { LabeledContentRow("Display transport", value: transport) }
                     Text(desktopSummary["connected"] as? Bool == true ? "Viewer connected" : "Viewer detached; desktop retained").font(.caption).foregroundColor(.secondary)
                     Button("Resume Desktop", action: openDesktop)
                     Button("Stop Desktop", role: .destructive) { confirmStopDesktop = true }
@@ -610,8 +618,6 @@ struct ManagerView: View {
                 NavigationLink(destination: GraphicsSettingsView()) { Label("Graphics", systemImage: "cpu") }
                 NavigationLink(destination: DesktopEnvironmentView()) { Label("Desktop Environment", systemImage: "macwindow.on.rectangle") }
                 NavigationLink(destination: AudioSettingsView()) { Label("Audio", systemImage: "speaker.wave.2") }
-                NavigationLink(destination: DesktopPreferencesView()) { Label("Display and Gestures", systemImage: "hand.tap") }
-                NavigationLink(destination: ApplicationGridView(manager: manager, run: run)) { Label("Application Launcher", systemImage: "square.grid.2x2") }
             }
             Section("Files & Devices") {
                 NavigationLink(destination: FileSharingView(environment: activeEnvironment, manager: manager, share: $share)) { Label("File Sharing", systemImage: "folder") }
@@ -1623,6 +1629,7 @@ private struct DesktopControlSettings: View {
                     LabeledContentRow("Desktop", value: value("desktopEnvironment"))
                     LabeledContentRow("Linux user", value: value("user"))
                     LabeledContentRow("Display server", value: value("displayServer"))
+                    LabeledContentRow("Display transport", value: value("transport"))
                     if health["memory_measured"] as? Bool == true, let bytes = health["host_resident_bytes"] as? NSNumber {
                         LabeledContentRow("App memory", value: ByteCountFormatter.string(fromByteCount: bytes.int64Value, countStyle: .memory))
                         Text("Host app resident memory, including the interpreter and guest workloads.").font(.caption).foregroundColor(.secondary)
@@ -1630,14 +1637,14 @@ private struct DesktopControlSettings: View {
                 }
                 Section("Display") {
                     LabeledContentRow("Received framebuffer", value: value("framebuffer"))
-                    NavigationLink("Resolution & Viewer Preferences", destination: DesktopPreferencesView())
+                    NavigationLink("Display & Gestures", destination: DesktopPreferencesView())
                     HStack { Button("Fit", action: { action("fit") }); Spacer(); Button("Actual Size", action: { action("actual") }); Spacer(); Button("Full Screen", action: { action("fullscreen") }) }
                     Toggle("External Desktop Output", isOn: $externalOutput)
                     LabeledContentRow("External scene", value: state["externalConnected"] as? Bool == true ? "Connected" : "Not connected")
                     if let maximum = state["screenMaximumRefresh"] as? Int, maximum > 0 { Text("iOS screen capability: up to \(maximum) Hz. This is not measured Linux frame rate.").font(.caption).foregroundColor(.secondary) }
                     if let modes = state["screenModes"] as? [String], !modes.isEmpty { DisclosureGroup("iOS Screen Modes · Read Only") { ForEach(modes, id: \.self) { Text($0).font(.caption) }; Text("Host screen capabilities; these are not additional guest resolution or refresh-rate controls.").font(.caption).foregroundColor(.secondary) } }
                     Button("Wireless Display (AirPlay)…") { action("wireless") }
-                    Text("Fit preserves aspect ratio. Guest resolution applies at the next desktop start; the current Xvfb session is retained while changing viewer scaling.").font(.caption).foregroundColor(.secondary)
+                    Text("Fit preserves aspect ratio. Resolution applies at the next desktop start. Changing viewer scaling keeps the current desktop running.").font(.caption).foregroundColor(.secondary)
                 }
                 Section("Input") {
                     Button(state["touchpad"] as? Bool == true ? "Show Desktop on This Device" : state["trackpadRequested"] as? Bool == true ? "Cancel Trackpad Connection" : "Use iPhone as Trackpad") { action("touchpad") }
@@ -1665,7 +1672,7 @@ private struct DesktopControlSettings: View {
                     LabeledContentRow("Presentation", value: value("presenter"))
                     NavigationLink("Guest Graphics Backend", destination: GraphicsSettingsView())
                     Text(value("statusDetail")).font(.caption).textSelection(.enabled)
-                    Text("Changing the viewer does not replace X11 or create another Linux session. No GPU utilization or wireless performance is inferred from connection state.").font(.caption).foregroundColor(.secondary)
+                    Text("Changing the viewer keeps the current Linux session running.").font(.caption).foregroundColor(.secondary)
                 }
             }.navigationTitle("Desktop Settings").toolbar { Button("Done") { dismiss() } }
         }.navigationViewStyle(.stack).onAppear(perform: refresh).onReceive(tick) { _ in refresh() }
@@ -1767,7 +1774,7 @@ private struct DesktopPreferencesView: View {
         }
         Section("Framebuffer Presentation") {
             Toggle("Metal Presentation · Experimental", isOn: $metalPresentation)
-            Text("Applies when reopening the viewer. Presents the received framebuffer through Metal, with Core Graphics fallback. Linux applications still use software rendering and the ARM64 interpreter. Physical-device performance has not yet been verified.").font(.caption)
+            Text("Applies when reopening the viewer. Presents the received framebuffer through Metal, with Core Graphics fallback. This does not change the renderer used by Linux applications. Physical-device performance has not yet been verified.").font(.caption)
         }
         Section("Execution") { Text("ARM64 interpreter; JIT is not required. The renderer for Linux applications is chosen in Settings › Graphics.").font(.caption) }
     }.navigationTitle("Display & Gestures").onAppear { resolution = UserDefaults.standard.object(forKey: key) == nil ? 3 : min(4, max(0, UserDefaults.standard.integer(forKey: key))) }.onChange(of: resolution) { UserDefaults.standard.set($0, forKey: key) } }
@@ -2078,134 +2085,123 @@ private struct SharedFoldersView: View {
     }
 }
 
+private enum DesktopChoice: String, CaseIterable, Identifiable {
+    case linuxrunner, lxqt, enlightenment, wayfire, hyprland, plasma
+    var id: String { rawValue }
+    var title: String {
+        switch self {
+        case .linuxrunner: return "LinuxRunner Desktop"
+        case .lxqt: return "LXQt"
+        case .enlightenment: return "Enlightenment"
+        case .wayfire: return "Wayfire"
+        case .hyprland: return "Hyprland · Experimental"
+        case .plasma: return "KDE Plasma · Experimental"
+        }
+    }
+    var isWayland: Bool { self == .wayfire || self == .hyprland }
+    var detail: String {
+        switch self {
+        case .linuxrunner: return "X11 desktop with Openbox, a panel and a file manager."
+        case .lxqt: return "X11 desktop with LXQt, Openbox, PCManFM-Qt and QTerminal."
+        case .enlightenment: return "X11 desktop with the Enlightenment shelf and Terminology terminal."
+        case .wayfire: return "Wayland desktop with wf-shell and foot. The compositor uses Metal GPU rendering when available, or software rendering."
+        case .hyprland: return "Wayland desktop with tiling windows, Waybar and foot. The compositor uses Metal GPU rendering when available. Software rendering disables blur, shadows and animations."
+        case .plasma: return "Experimental Plasma X11 desktop from Debian packages. It needs more memory than LinuxRunner Desktop. Plasma on Arch is not supported."
+        }
+    }
+    var available: Bool {
+        switch self {
+        case .linuxrunner, .lxqt: return true
+        case .enlightenment: return !LRRuntimeBridge.activeEnvironmentIsDebian()
+        case .wayfire: return LRRuntimeBridge.activeEnvironmentIsDebian() || LRRuntimeBridge.activeEnvironmentIsArch()
+        case .hyprland: return LRRuntimeBridge.activeEnvironmentIsArch()
+        case .plasma: return LRRuntimeBridge.activeEnvironmentIsDebian()
+        }
+    }
+    var installed: Bool {
+        switch self {
+        case .linuxrunner: return true
+        case .lxqt: return LRRuntimeBridge.lxqtInstalled()
+        case .enlightenment: return LRRuntimeBridge.enlightenmentInstalled()
+        case .wayfire: return LRRuntimeBridge.wayfireInstalled()
+        case .hyprland: return LRRuntimeBridge.hyprlandInstalled()
+        case .plasma: return LRRuntimeBridge.plasmaInstalled()
+        }
+    }
+    func install(progress: @escaping (String) -> Void, completion: @escaping (Error?) -> Void) {
+        switch self {
+        case .linuxrunner: completion(nil)
+        case .lxqt: LRRuntimeBridge.installLXQt(progress, completion: completion)
+        case .enlightenment: LRRuntimeBridge.installEnlightenment(progress, completion: completion)
+        case .wayfire: LRRuntimeBridge.installWayfire(progress, completion: completion)
+        case .hyprland: LRRuntimeBridge.installHyprland(progress, completion: completion)
+        case .plasma: LRRuntimeBridge.installPlasma(progress, completion: completion)
+        }
+    }
+}
+
 private struct DesktopEnvironmentView: View {
     @AppStorage private var environment: String
+    @State private var installed: Set<DesktopChoice> = []
+    @State private var installing: DesktopChoice?
+    @State private var stage = ""
+    @State private var failure: String?
     init() {
         let key = "LinuxRunnerDesktop.environment." + LRRuntimeBridge.activeRootName()
         let previous = LRRuntimeBridge.activeEnvironmentIsDebian() ? UserDefaults.standard.string(forKey: "LinuxRunnerDesktop.environment") : nil
         _environment = AppStorage(wrappedValue: previous ?? "linuxrunner", key)
     }
-    @State private var installed = LRRuntimeBridge.plasmaInstalled()
-    @State private var lxqtInstalled = LRRuntimeBridge.lxqtInstalled()
-    @State private var enlightenmentInstalled = LRRuntimeBridge.enlightenmentInstalled()
-    @State private var wayfireInstalled = LRRuntimeBridge.wayfireInstalled()
-    @State private var hyprlandInstalled = LRRuntimeBridge.hyprlandInstalled()
-    @State private var working: String?
-    @State private var lxqtWorking: String?
-    @State private var enlightenmentWorking: String?
-    @State private var wayfireWorking: String?
-    @State private var hyprlandWorking: String?
-    @State private var failure: String?
-    var body: some View { Form {
-        Section {
-            Picker("Desktop", selection: $environment) {
-                Text("LinuxRunner Desktop").tag("linuxrunner")
-                Text("LXQt").tag("lxqt").disabled(!lxqtInstalled)
-                Text("Enlightenment").tag("enlightenment").disabled(!enlightenmentInstalled || LRRuntimeBridge.activeEnvironmentIsDebian())
-                Text("Wayfire").tag("wayfire").disabled(!wayfireInstalled)
-                Text("Hyprland · Experimental").tag("hyprland").disabled(!hyprlandInstalled)
-                Text("KDE Plasma · Experimental").tag("plasma").disabled(!installed)
-            }
-            Text(environment == "hyprland"
-                 ? "Hyprland (tiling Wayland compositor with animations and rounded windows; Waybar panel with an Apps launcher, foot terminal). Drawn on the CPU on LinuxRunner's virtual display device, so it is the most demanding desktop. If it is not installed, Open Desktop starts the LinuxRunner Desktop."
-                 : environment == "wayfire"
-                 ? "Wayfire (Wayland compositor with animations, window previews and workspaces; wf-shell panel and dock, foot terminal) drawn in software inside LinuxRunner's display. If it is not installed, Open Desktop starts the LinuxRunner Desktop."
-                 : environment == "enlightenment"
-                 ? "Enlightenment (X11 session with its own software compositor: shelf, main menu on a desktop click, Terminology terminal) from the distribution's own packages. If it is not installed, Open Desktop starts the LinuxRunner Desktop."
-                 : environment == "lxqt"
-                 ? "LXQt 2 (X11 session: LXQt panel and menu, PCManFM-Qt desktop, QTerminal, Openbox) from the distribution's own packages. Lightweight; if it is not installed, Open Desktop starts the LinuxRunner Desktop."
-                 : environment == "plasma"
-                 ? "KDE Plasma 6 (X11 session: KWin, Plasma panel and desktop, Dolphin, Konsole) from Debian's own packages. It needs more memory and starts more slowly than the LinuxRunner Desktop. If it is not installed, Open Desktop starts the LinuxRunner Desktop."
-                 : LRRuntimeBridge.activeEnvironmentIsArch() ? "Arch X11 desktop: Openbox window manager, LXQt panel and PCManFM-Qt file manager." : "Openbox window manager, panel and file manager: the lightest and most tested desktop.").font(.caption)
-        } header: { Text("Open Desktop Starts") } footer: { Text("Applies to the next desktop start. Stop a running desktop first to switch.") }
-        Section {
-            if installed { Label("KDE Plasma installed", systemImage: "checkmark.circle") }
-            else if LRRuntimeBridge.activeEnvironmentIsArch() { Text("Arch's current Plasma 6.8 packages require Wayland. LinuxRunner currently supports X11; use LinuxRunner Desktop. Plasma on Arch has not been validated.").foregroundColor(.secondary) }
-            else if !LRRuntimeBridge.activeEnvironmentIsDebian() { Text("KDE Plasma installation is available for Debian environments.").foregroundColor(.secondary) }
-            else {
-                Button(working == nil ? "Install KDE Plasma" : "Installing…") { install() }.disabled(working != nil || !LRRuntimeBridge.isRunning())
-                if let working { Text(working).font(.caption).foregroundColor(.secondary) }
-            }
-            if let failure { Text(failure).font(.footnote).foregroundColor(.orange) }
-        } header: { Text("KDE Plasma") } footer: {
-            Text("About 550 official Debian packages (about 240 MB download, 930 MB installed); network needed once. The LinuxRunner Desktop stays installed as the fallback.")
-        }
-        Section {
-            if lxqtInstalled { Label("LXQt installed", systemImage: "checkmark.circle") }
-            else {
-                Button(lxqtWorking == nil ? "Install LXQt" : "Installing…") { installLXQt() }.disabled(lxqtWorking != nil || working != nil || !LRRuntimeBridge.isRunning())
-                if let lxqtWorking { Text(lxqtWorking).font(.caption).foregroundColor(.secondary) }
-            }
-        } header: { Text("LXQt") } footer: {
-            Text("The LXQt desktop from the distribution's own packages; network needed once. The LinuxRunner Desktop stays installed as the fallback.")
-        }
-        Section {
-            // Debian's Enlightenment shows only its splash, then a black screen
-            // (same with the earlier runtime); Arch's works. Not offered on Debian.
-            if LRRuntimeBridge.activeEnvironmentIsDebian() { Label("Not available on Debian", systemImage: "xmark.circle").foregroundColor(.secondary) }
-            else if enlightenmentInstalled { Label("Enlightenment installed", systemImage: "checkmark.circle") }
-            else {
-                Button(enlightenmentWorking == nil ? "Install Enlightenment" : "Installing…") { installEnlightenment() }.disabled(enlightenmentWorking != nil || lxqtWorking != nil || working != nil || !LRRuntimeBridge.isRunning())
-                if let enlightenmentWorking { Text(enlightenmentWorking).font(.caption).foregroundColor(.secondary) }
-            }
-        } header: { Text("Enlightenment") } footer: {
-            Text(LRRuntimeBridge.activeEnvironmentIsDebian() ? "Enlightenment does not start correctly on Debian yet (it stops at its splash screen). Use LXQt or the LinuxRunner Desktop, or Enlightenment on Arch Linux ARM." : "A large download (mostly Enlightenment's themes and wallpapers); network needed once. The LinuxRunner Desktop stays installed as the fallback.")
-        }
-        Section {
-            if wayfireInstalled { Label("Wayfire installed", systemImage: "checkmark.circle") }
-            else if !(LRRuntimeBridge.activeEnvironmentIsDebian() || LRRuntimeBridge.activeEnvironmentIsArch()) { Text("Wayfire is available for Debian and Arch Linux ARM environments.").foregroundColor(.secondary) }
-            else {
-                Button(wayfireWorking == nil ? "Install Wayfire" : "Installing…") { installWayfire() }.disabled(wayfireWorking != nil || enlightenmentWorking != nil || lxqtWorking != nil || working != nil || !LRRuntimeBridge.isRunning())
-                if let wayfireWorking { Text(wayfireWorking).font(.caption).foregroundColor(.secondary) }
-            }
-        } header: { Text("Wayfire") } footer: {
-            Text("Wayland desktop from the distribution's packages (Arch: about 70 MB download); network needed once. Effects that need a GPU (cube, blur) are off. The LinuxRunner Desktop stays installed as the fallback.")
-        }
-        Section {
-            if hyprlandInstalled { Label("Hyprland installed", systemImage: "checkmark.circle") }
-            else if !LRRuntimeBridge.activeEnvironmentIsArch() { Text("Hyprland is packaged by Arch Linux ARM only.").foregroundColor(.secondary) }
-            else {
-                Button(hyprlandWorking == nil ? "Install Hyprland" : "Installing…") { installHyprland() }.disabled(hyprlandWorking != nil || wayfireWorking != nil || enlightenmentWorking != nil || lxqtWorking != nil || working != nil || !LRRuntimeBridge.isRunning())
-                if let hyprlandWorking { Text(hyprlandWorking).font(.caption).foregroundColor(.secondary) }
-            }
-        } header: { Text("Hyprland · Experimental") } footer: {
-            Text("Rendered on the CPU (no GPU acceleration yet); blur is off. Network needed once. The LinuxRunner Desktop stays installed as the fallback.")
-        }
-    }.navigationTitle("Desktop Environment").onAppear { installed = LRRuntimeBridge.plasmaInstalled(); lxqtInstalled = LRRuntimeBridge.lxqtInstalled(); enlightenmentInstalled = LRRuntimeBridge.enlightenmentInstalled(); wayfireInstalled = LRRuntimeBridge.wayfireInstalled(); hyprlandInstalled = LRRuntimeBridge.hyprlandInstalled() } }
-    private func installHyprland() {
-        failure = nil; hyprlandWorking = "Starting"
-        LRRuntimeBridge.installHyprland({ hyprlandWorking = $0 }) { error in
-            hyprlandWorking = nil; hyprlandInstalled = LRRuntimeBridge.hyprlandInstalled()
-            if let error { failure = error.localizedDescription } else if hyprlandInstalled { environment = "hyprland" }
+    private var selected: DesktopChoice { DesktopChoice(rawValue: environment) ?? .linuxrunner }
+    private var installBusy: Bool { installing != nil || LRRuntimeBridge.installationRunning() }
+    private func refresh() { installed = Set(DesktopChoice.allCases.filter { $0.installed }) }
+    private func install(_ desktop: DesktopChoice) {
+        guard !installBusy else { return }
+        failure = nil; installing = desktop; stage = "Starting"
+        desktop.install(progress: { stage = $0 }) { error in
+            installing = nil; refresh()
+            if let error { failure = error.localizedDescription }
+            else if installed.contains(desktop) { environment = desktop.rawValue }
         }
     }
-    private func installWayfire() {
-        failure = nil; wayfireWorking = "Starting"
-        LRRuntimeBridge.installWayfire({ wayfireWorking = $0 }) { error in
-            wayfireWorking = nil; wayfireInstalled = LRRuntimeBridge.wayfireInstalled()
-            if let error { failure = error.localizedDescription } else if wayfireInstalled { environment = "wayfire" }
-        }
-    }
-    private func installEnlightenment() {
-        failure = nil; enlightenmentWorking = "Starting"
-        LRRuntimeBridge.installEnlightenment({ enlightenmentWorking = $0 }) { error in
-            enlightenmentWorking = nil; enlightenmentInstalled = LRRuntimeBridge.enlightenmentInstalled()
-            if let error { failure = error.localizedDescription } else if enlightenmentInstalled { environment = "enlightenment" }
-        }
-    }
-    private func installLXQt() {
-        failure = nil; lxqtWorking = "Starting"
-        LRRuntimeBridge.installLXQt({ lxqtWorking = $0 }) { error in
-            lxqtWorking = nil; lxqtInstalled = LRRuntimeBridge.lxqtInstalled()
-            if let error { failure = error.localizedDescription } else if lxqtInstalled { environment = "lxqt" }
-        }
-    }
-    private func install() {
-        failure = nil; working = "Starting"
-        LRRuntimeBridge.installPlasma({ working = $0 }) { error in
-            working = nil; installed = LRRuntimeBridge.plasmaInstalled()
-            if let error { failure = error.localizedDescription } else if installed { environment = "plasma" }
-        }
+    var body: some View {
+        Form {
+            Section {
+                Picker("Desktop", selection: $environment) {
+                    ForEach(DesktopChoice.allCases) { desktop in
+                        Text(desktop.title).tag(desktop.rawValue).disabled(!desktop.available || !installed.contains(desktop))
+                    }
+                }.disabled(installBusy)
+                Text(selected.detail).font(.caption).foregroundColor(.secondary)
+                if selected.isWayland && LRRuntimeBridge.defaultLinuxUser() == "root" {
+                    Text("Wayland desktops require a Linux user other than root. Select a user before starting the desktop.").font(.callout).foregroundColor(.orange)
+                    NavigationLink("Select Linux User", destination: LinuxUsersView())
+                }
+            } header: { Text("Next Desktop Start") } footer: {
+                Text("Save documents and stop the current desktop to change the desktop. LinuxRunner Desktop stays installed as the fallback.")
+            }
+            Section {
+                ForEach(DesktopChoice.allCases.filter { $0 != .linuxrunner && $0.available }) { desktop in
+                    HStack {
+                        Text(desktop.title)
+                        Spacer()
+                        if installing == desktop { ProgressView().accessibilityLabel("Installing " + desktop.title) }
+                        else if installed.contains(desktop) { Image(systemName: "checkmark.circle.fill").foregroundColor(.green).accessibilityLabel("Installed") }
+                        else { Button("Install") { install(desktop) }.buttonStyle(.borderless).disabled(installBusy || !LRRuntimeBridge.isRunning()).accessibilityLabel("Install " + desktop.title) }
+                    }
+                }
+                if let installing {
+                    Text("Installing " + installing.title).font(.callout)
+                    Text(stage).font(.caption).foregroundColor(.secondary)
+                }
+                if let failure { Text(failure).font(.footnote).foregroundColor(.orange).textSelection(.enabled) }
+            } header: { Text("Desktop Components") } footer: {
+                Text("Installation needs a network connection. Install one desktop at a time. The selected desktop changes after a successful installation.")
+            }
+            Section {
+                NavigationLink("Display & Gestures", destination: DesktopPreferencesView())
+                NavigationLink("Graphics", destination: GraphicsSettingsView())
+            }
+        }.navigationTitle("Desktop Environment").onAppear(perform: refresh)
     }
 }
 private struct GraphicsSettingsView: View {

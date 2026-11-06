@@ -76,7 +76,7 @@ iOS/iPadOS may suspend or terminate LinuxRunner. Keep Screen Awake prevents idle
 
 ## Input or iPad Display Problems
 
-Try **Fit to Screen** and **Actual Size** for viewer scaling. **Desktop Settings… → Display → Resolution & Viewer Preferences** chooses a Linux resolution when a new session starts; save work before restarting. Use the on-screen keyboard/modifier bar to distinguish accessory input problems from Linux application behavior.
+Try **Fit to Screen** and **Actual Size** for viewer scaling. **Desktop Settings… → Display → Display & Gestures** chooses a Linux resolution when a new session starts; save work before restarting. Use the on-screen keyboard/modifier bar to distinguish accessory input problems from Linux application behavior.
 
 For pointer issues, inspect **Settings → Devices** and its mouse settings. Report whether input came from touch, mouse, trackpad or a hardware keyboard. iPad support has been physically tested. Include model, iPadOS version, orientation and window size when reporting a layout problem.
 
