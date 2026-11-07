@@ -4,6 +4,14 @@ SUPPORT_DIR=$(CDPATH= cd -- "$(dirname "$0")" && pwd)
 cd "$SUPPORT_DIR"
 SUPPORT_VERSION=$(cat support-version 2>/dev/null || true)
 support_fail() { echo "$1: result=FAIL reason=$2"; exit "${3:-1}"; }
+support_install_checkpoint() {
+    case "${LR_INSTALL_CANCEL_FILE:-}" in "$SUPPORT_DIR"/install-cancel-*) ;; *) return 0;; esac
+    if [ -f "$LR_INSTALL_CANCEL_FILE" ]; then
+        echo 'PROFILE_FAILURE: category=INSTALL_CANCELLED detail=Cancelled after the current stage'
+        exit 130
+    fi
+}
+support_install_checkpoint
 verify_resources() {
     [ -n "$SUPPORT_VERSION" ] || support_fail SUPPORT_DEPLOY version-missing
     echo "SUPPORT_DEPLOY: version=$SUPPORT_VERSION destination=$SUPPORT_DIR"

@@ -299,10 +299,12 @@ else echo 'GUI_SESSION: dbus_session=not-installed'; fi
 audio_port=
 [ ! -s "$session/audio-port" ] || audio_port=$(cat "$session/audio-port")
 case "$audio_port" in *[!0-9]*) audio_port=;; esac
+echo off > "$session/audio-state"
 if [ -n "$audio_port" ] && command -v pulseaudio >/dev/null && command -v parec >/dev/null && [ -x ./audio-relay ]; then
     $setsid_cmd /bin/sh ./audio-session.sh "$session" "$audio_port" > "$session/audio.log" 2>&1 & spid=$!
+    echo available > "$session/audio-state"
     echo "GUI_SESSION: audio=pulseaudio group=$spid"
-elif [ -n "$audio_port" ]; then echo 'GUI_SESSION: audio=unavailable (Desktop > Install Desktop Support adds sound)'; fi
+elif [ -n "$audio_port" ]; then echo unavailable > "$session/audio-state"; echo 'GUI_SESSION: audio=unavailable (Desktop > Install Desktop Support adds sound)'; fi
 # Terminals of the same account join this desktop (DISPLAY, X authority,
 # runtime directory, session bus); see desktop-env.sh. Private to the account.
 if [ "$mode" = desktop ]; then

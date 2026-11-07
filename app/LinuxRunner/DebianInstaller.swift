@@ -48,6 +48,7 @@ private final class InstallCancellation: @unchecked Sendable {
     @Published var failure: String?
     private var operation: Task<Void, Never>?
     private var cancellation = InstallCancellation()
+    static func requiredBytes(_ manifest: DebianManifest) -> Int64 { max(Int64(1 << 30), manifest.downloadBytes + manifest.installedBytes * 4) }
     func cancel() { cancellation.cancel(); operation?.cancel() }
     func install(completion: @escaping (LinuxEnvironment) -> Void) {
         guard !running else { return }; running = true; failure = nil; cancellation = InstallCancellation()
@@ -59,7 +60,7 @@ private final class InstallCancellation: @unchecked Sendable {
                 let manifest = try DebianManifest.load()
                 let base = LRRuntimeBridge.managedStorageURL()
                 let available = try base.resourceValues(forKeys: [.volumeAvailableCapacityForImportantUsageKey]).volumeAvailableCapacityForImportantUsage ?? 0
-                let required = max(Int64(1024 * 1024 * 1024), manifest.downloadBytes + manifest.installedBytes * 4)
+                let required = Self.requiredBytes(manifest)
                 DiagnosticCenter.installer(2, message: "stage=space_check available_bytes=\(available) required_bytes=\(required) host_page=\(getpagesize()) guest_page=4096 cancelled=\(token.check())")
                 guard available >= required else { throw DebianInstallError.failure("At least \(ByteCountFormatter.string(fromByteCount: required, countStyle: .file)) of available storage is required.") }
                 let cache = base.appendingPathComponent("downloads/debian-trixie-arm64", isDirectory: true)
@@ -77,7 +78,8 @@ private final class InstallCancellation: @unchecked Sendable {
                     message = "Downloading/verifying \(package.Package) (\(index + 1)/\(manifest.packages.count))"
                     fraction = Double(index) / Double(manifest.packages.count) * 0.55
                     let destination = cache.appendingPathComponent(package.Package + ".deb")
-                    let cached = try? Self.verification(destination, package: package)
+                    let cached = try? await Task.detached(priority: .utility) { try Self.verification(destination, package: package, cancel: { token.check() }) }.value
+                    try Task.checkCancellation(); if token.check() { throw CancellationError() }
                     let valid = cached?.valid == true
                     DiagnosticCenter.installer(2, message: "stage=cache package=\(package.Package) index=\(index) source=\(manifest.repository) filename=\(package.Filename) expected_size=\(package.Size) expected_sha256=\(package.SHA256) valid=\(valid) actual_size=\(cached?.size ?? -1) actual_sha256=\(cached?.sha ?? "unavailable")")
                     if !valid {
@@ -90,7 +92,7 @@ private final class InstallCancellation: @unchecked Sendable {
                         let http = (response as? HTTPURLResponse)?.statusCode ?? -1
                         DiagnosticCenter.installer(2, message: "stage=http package=\(package.Package) index=\(index) status=\(http) received_file=\(download.path)")
                         guard http == 200 else { throw DebianInstallError.failure("Download failed for \(package.Package): HTTP \(http).") }
-                        let checked = try Self.verification(download, package: package)
+                        let checked = try await Task.detached(priority: .utility) { try Self.verification(download, package: package, cancel: { token.check() }) }.value
                         DiagnosticCenter.installer(checked.valid ? 2 : 0, message: "stage=verification package=\(package.Package) index=\(index) expected_size=\(package.Size) actual_size=\(checked.size) expected_sha256=\(package.SHA256) actual_sha256=\(checked.sha) result=\(checked.valid ? "PASS" : "FAIL")")
                         guard checked.valid else { throw DebianInstallError.failure("Integrity verification failed for \(package.Package): expected \(package.Size) bytes, received \(checked.size); SHA-256 \(checked.sha == package.SHA256 ? "matches" : "mismatch").") }
                         do {
@@ -109,7 +111,7 @@ private final class InstallCancellation: @unchecked Sendable {
                 if token.check() { throw CancellationError() }
                 message = "Importing isolated Debian filesystem"
                 DiagnosticCenter.installer(2, message: "stage=fakefs_import root=\(root) output=\(archive.path) cancelled=\(token.check())")
-                let sha = try Self.sha256(archive)
+                let sha = try await Task.detached(priority: .utility) { try Self.sha256(archive, cancel: { token.check() }) }.value
                 try await Task.detached(priority: .utility) {
                     try LRRuntimeBridge.importVerifiedEnvironment(archive, root: root, sha256: sha, progress: { value, _ in Task { @MainActor in self.fraction = 0.75 + value * 0.25 } }, cancel: { token.check() })
                 }.value
@@ -134,17 +136,19 @@ private final class InstallCancellation: @unchecked Sendable {
             }
         }
     }
-    nonisolated static func sha256(_ url: URL) throws -> String {
+    nonisolated static func sha256(_ url: URL, cancel: () -> Bool = { false }) throws -> String {
         let handle = try FileHandle(forReadingFrom: url); defer { try? handle.close() }
         var hash = SHA256()
-        while let data = try handle.read(upToCount: 65536), !data.isEmpty { hash.update(data: data) }
+        while let data = try handle.read(upToCount: 65536), !data.isEmpty {
+            if cancel() { throw CancellationError() }; hash.update(data: data)
+        }
         return hash.finalize().map { String(format: "%02x", $0) }.joined()
     }
-    nonisolated static func verification(_ url: URL, package: DebianPackage) throws -> (valid: Bool, size: Int64, sha: String) {
+    nonisolated static func verification(_ url: URL, package: DebianPackage, cancel: () -> Bool = { false }) throws -> (valid: Bool, size: Int64, sha: String) {
         let info = try url.resourceValues(forKeys: [.isRegularFileKey, .isSymbolicLinkKey, .fileSizeKey])
         let size = Int64(info.fileSize ?? -1)
         guard info.isRegularFile == true, info.isSymbolicLink != true else { return (false, size, "not-regular-file") }
-        let hash = try sha256(url)
+        let hash = try sha256(url, cancel: cancel)
         return (size == Int64(package.Size) && hash == package.SHA256, size, hash)
     }
 }

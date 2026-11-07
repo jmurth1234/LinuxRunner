@@ -9,7 +9,9 @@ NS_ASSUME_NONNULL_BEGIN
 /// Native desktop settings use these bounded actions; no arbitrary shell command.
 - (NSDictionary *)desktopControlState;
 - (void)performDesktopAction:(NSString *)action;
+- (void)performDesktopActionAfterDismissing:(NSString *)action;
 - (void)stopDesktopSession;
++ (BOOL)supportInstallationRunning;
 - (void)launchDesktopApplication:(NSDictionary *)configuration;
 + (NSURL * _Nullable)prepareSupport:(NSError **)error;
 /// Persistent workspace ownership keeps external output when its viewer closes.

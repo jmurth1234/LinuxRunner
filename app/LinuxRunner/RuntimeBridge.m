@@ -624,7 +624,7 @@ static NSString *LRJITLastFailure;   // reason of the last refused or failed act
     else if(LRVirglActive){active=@"Metal GPU (virgl) · Experimental";detail=[NSString stringWithFormat:@"virtio-gpu device active · %@",LRVirglStatus?:@"ANGLE/Metal"];}
     else if(LRVirglStatus.length){active=@"Software (fallback)";detail=[NSString stringWithFormat:@"Metal GPU did not start: %@",LRVirglStatus];}
     else if([mode isEqual:@"metal"]){active=@"Software";detail=@"Metal GPU selected · takes effect after LinuxRunner restarts";}
-    else if([mode isEqual:@"automatic"]){active=@"Software";detail=@"Automatic uses software rendering until Metal is validated on iPhone";}
+    else if([mode isEqual:@"automatic"]){active=@"Software";detail=@"Automatic uses software rendering until Metal is validated on this device";}
     else {active=@"Software";detail=@"Software rendering selected";}
     return @{@"mode":mode,@"active":active,@"detail":detail,@"device":@(LRVirglActive),@"restartNeeded":@([mode isEqual:@"metal"]!=LRVirglActive&&!LRVirglStatus.length)};
 }
@@ -1241,7 +1241,7 @@ static void LRWaitForProcess(TerminalViewController *process, NSTimeInterval tim
         BOOL ok = !error && self.accountToolsPresent && (!administrator || self.canGrantAdministrator);
         [self logCategory:@"ACCOUNT" event:[NSString stringWithFormat:@"account tools install ok=%d error=%@", ok, error.localizedDescription ?: @"none"]];
         if (ok) then();
-        else failure(error ?: lrError(EIO, @"The account tools were reported installed but are missing. Export the Open Desktop Report and try again."));
+        else failure(error ?: lrError(EIO, @"The account tools were reported installed but are missing. Export Desktop Report and try again."));
     }];
 }
 + (void)setLinuxPassword:(NSString *)name password:(NSString *)password progress:(void (^)(NSString *))progress completion:(void (^)(NSError *))completion {
@@ -1317,21 +1317,27 @@ static void LRWaitForProcess(TerminalViewController *process, NSTimeInterval tim
 // percentages (APT::Status-Fd) to apt-status. Nothing here invents a number.
 NSNotificationName const LRInstallProgressNotification = @"LRInstallProgressNotification";
 static NSString *LRActiveInstall;
+static NSURL *LRActiveInstallCancelURL;
 + (BOOL)installationRunning { return LRActiveInstall != nil; }
++ (BOOL)cancelSupportInstallation:(NSError **)error {
+    if(!LRActiveInstallCancelURL){if(error)*error=lrError(ENOENT,@"No support installation is running.");return NO;}
+    return [NSData.data writeToURL:LRActiveInstallCancelURL options:NSDataWritingAtomic error:error];
+}
 static NSString *LRInstallFailureMessage(NSString *category, NSString *detail) {
     NSDictionary *advice = @{
+        @"INSTALL_CANCELLED": @"Installation cancelled after the current stage. Completed packages are kept.",
         @"NETWORK_UNAVAILABLE": @"LinuxRunner could not reach the package servers. Check the internet connection and try again.",
         @"TLS_CERTIFICATE_ERROR": @"A secure connection to the package servers failed. Check that the date and time are correct, then try again.",
         @"PACKAGE_MANAGER_BUSY": @"Another package operation is using the package manager. Wait for it to finish, then try again.",
-        @"INSUFFICIENT_STORAGE": @"There is not enough free storage on this iPhone. Free some space and try again.",
+        @"INSUFFICIENT_STORAGE": @"There is not enough free storage on this device. Free some space and try again.",
         @"PACKAGE_NOT_FOUND": @"The package servers did not offer a required package. Try again later.",
         @"REPOSITORY_METADATA_ERROR": @"The package lists could not be verified or downloaded. Try again later.",
-        @"DEPENDENCY_CONFLICT": @"The packages have conflicting dependencies. Export the Open Desktop Report and send it.",
+        @"DEPENDENCY_CONFLICT": @"The packages have conflicting dependencies. Export Desktop Report and send it.",
         @"PACKAGE_DATABASE_RECOVERY_REQUIRED": @"Linux package setup needs attention. Review the retained package log and Repair Center before retrying.",
         @"PACKAGE_MANAGER_STUCK": @"Linux first-start setup stopped making progress. Restart LinuxRunner and try again.",
         @"FILESYSTEM_ERROR": @"Linux could not write its files. Restart LinuxRunner and try again.",
-        @"PLASMA_X11_UNAVAILABLE": @"These Arch repositories do not provide the Plasma X11 session required by LinuxRunner. Choose LinuxRunner Desktop. Wayland is not supported.",
-        @"ACCOUNT_TOOL_BROKEN": @"The account tools were installed but do not run. Export the Open Desktop Report and send it.",
+        @"PLASMA_X11_UNAVAILABLE": @"These Arch repositories do not provide the Plasma X11 session required by LinuxRunner. Choose LinuxRunner Desktop, Wayfire or Hyprland.",
+        @"ACCOUNT_TOOL_BROKEN": @"The account tools were installed but do not run. Export Desktop Report and send it.",
     };
     NSString *base = advice[category] ?: @"The installation failed.";
     return detail.length ? [NSString stringWithFormat:@"%@\n\nDetail: %@", base, detail] : base;
@@ -1343,75 +1349,87 @@ static NSString *LRInstallFailureMessage(NSString *category, NSString *detail) {
     [NSNotificationCenter.defaultCenter postNotificationName:LRInstallProgressNotification object:nil userInfo:info];
 }
 + (void)runSupportInstall:(NSArray<NSString *> *)arguments title:(NSString *)title progress:(void (^)(NSString *))progress completion:(void (^)(NSError * _Nullable))completion {
+    if ([LRGUIViewController supportInstallationRunning]) { completion(lrError(EBUSY,@"Close the other support installer terminal before starting this installation.")); return; }
     if (LRActiveInstall) { completion(lrError(EBUSY, [NSString stringWithFormat:@"“%@” is already running. Wait for it to finish, then try again.", LRActiveInstall])); return; }
     NSError *error = nil; NSURL *support = [LRGUIViewController prepareSupport:&error];
     if (!support) { completion(error); return; }
     for (NSString *name in @[@"install-result", @"apt-status"]) [NSFileManager.defaultManager removeItemAtURL:[support URLByAppendingPathComponent:name] error:nil];
     NSURL *logURL = [support URLByAppendingPathComponent:@"desktop-profile.sh.log"], *resultURL = [support URLByAppendingPathComponent:@"install-result"], *statusURL = [support URLByAppendingPathComponent:@"apt-status"];
     [NSFileManager.defaultManager removeItemAtURL:logURL error:nil];
-    TerminalViewController *installer = [self terminalForCommand:[@[@"/bin/sh", @"/home/mobile/Downloads/.linuxrunner/gui/installer-run.sh", @"desktop-profile.sh"] arrayByAddingObjectsFromArray:arguments] directory:@"/root"];
+    NSString *cancelName=[@"install-cancel-" stringByAppendingString:NSUUID.UUID.UUIDString.lowercaseString];
+    NSURL *cancelURL=[support URLByAppendingPathComponent:cancelName];
+    NSString *cancelVariable=[@"LR_INSTALL_CANCEL_FILE=/home/mobile/Downloads/.linuxrunner/gui/" stringByAppendingString:cancelName];
+    TerminalViewController *installer = [self terminalForCommand:[@[@"/usr/bin/env", cancelVariable, @"/bin/sh", @"/home/mobile/Downloads/.linuxrunner/gui/installer-run.sh", @"desktop-profile.sh"] arrayByAddingObjectsFromArray:arguments] directory:@"/root"];
     if (!installer) { completion(lrError(EIO, @"The installer could not be started. Restart LinuxRunner and try again.")); return; }
-    LRActiveInstall = title;
+    LRActiveInstall = title; LRActiveInstallCancelURL=cancelURL;
     [self beginAwake:@"installation"];
     [self logCategory:@"SETUP" event:[NSString stringWithFormat:@"support install started: %@ (%@)", title, [arguments componentsJoinedByString:@" "]]];
     NSDate *start = NSDate.date; __block NSDate *endedAt = nil; __block NSString *reported = nil;
     [self postInstall:title phase:@"running" stage:@"Checking existing installation" detail:@"" fraction:-1 elapsed:0 error:nil log:nil];
+    __block BOOL reading=NO;
     [NSTimer scheduledTimerWithTimeInterval:0.5 repeats:YES block:^(NSTimer *timer) {
-        NSString *log = [NSString stringWithContentsOfURL:logURL encoding:NSUTF8StringEncoding error:nil] ?: @"";
-        NSString *stage = nil, *detail = @"", *category = nil, *failureDetail = nil; long done = -1, total = -1;
-        for (NSString *line in [log componentsSeparatedByString:@"\n"]) {
-            if ([line hasPrefix:@"PROFILE_STAGE: "]) { stage = [line substringFromIndex:15]; detail = @""; done = total = -1; }
-            else if ([line hasPrefix:@"PACKAGE_STAGE: "]) {
-                NSString *text = [line substringFromIndex:15]; NSRange colon = [text rangeOfString:@": "];
-                stage = colon.location == NSNotFound ? text : [text substringToIndex:colon.location];
-                detail = colon.location == NSNotFound ? @"" : [text substringFromIndex:NSMaxRange(colon)];
-            } else if ([line hasPrefix:@"PACKAGE_PROGRESS: "]) {
-                NSArray *parts = [[line substringFromIndex:18] componentsSeparatedByString:@" "];
-                if (parts.count == 2) { done = [parts[0] integerValue]; total = [parts[1] integerValue]; }
-            } else if ([line hasPrefix:@"PROFILE_FAILURE: "] || [line hasPrefix:@"PACKAGE_LOCK: category="]) {
-                NSRange c = [line rangeOfString:@"category="]; NSString *rest = [line substringFromIndex:NSMaxRange(c)];
-                NSRange space = [rest rangeOfString:@" "]; category = space.location == NSNotFound ? rest : [rest substringToIndex:space.location];
-                NSRange d = [rest rangeOfString:@"detail="]; failureDetail = d.location == NSNotFound ? (space.location == NSNotFound ? @"" : [rest substringFromIndex:space.location + 1]) : [rest substringFromIndex:NSMaxRange(d)];
+        if(reading)return;reading=YES;
+        NSString *lastStage=reported;
+        dispatch_async(dispatch_get_global_queue(QOS_CLASS_UTILITY,0), ^{
+            NSString *log=LRDiagnosticTailString(LRReadDiagnosticTail(logURL,131072))?:@"";
+            NSString *stage = lastStage, *detail = @"", *category = nil, *failureDetail = nil; long done = -1, total = -1;
+            for (NSString *line in [log componentsSeparatedByString:@"\n"]) {
+                if ([line hasPrefix:@"PROFILE_STAGE: "]) { stage = [line substringFromIndex:15]; detail = @""; done = total = -1; }
+                else if ([line hasPrefix:@"PACKAGE_STAGE: "]) {
+                    NSString *text = [line substringFromIndex:15]; NSRange colon = [text rangeOfString:@": "];
+                    stage = colon.location == NSNotFound ? text : [text substringToIndex:colon.location];
+                    detail = colon.location == NSNotFound ? @"" : [text substringFromIndex:NSMaxRange(colon)];
+                } else if ([line hasPrefix:@"PACKAGE_PROGRESS: "]) {
+                    NSArray *parts = [[line substringFromIndex:18] componentsSeparatedByString:@" "];
+                    if (parts.count == 2) { done = [parts[0] integerValue]; total = [parts[1] integerValue]; }
+                } else if ([line hasPrefix:@"PROFILE_FAILURE: "] || [line hasPrefix:@"PACKAGE_LOCK: category="]) {
+                    NSRange c = [line rangeOfString:@"category="]; if(c.location==NSNotFound)continue; NSString *rest = [line substringFromIndex:NSMaxRange(c)];
+                    NSRange space = [rest rangeOfString:@" "]; category = space.location == NSNotFound ? rest : [rest substringToIndex:space.location];
+                    NSRange d = [rest rangeOfString:@"detail="]; failureDetail = d.location == NSNotFound ? (space.location == NSNotFound ? @"" : [rest substringFromIndex:space.location + 1]) : [rest substringFromIndex:NSMaxRange(d)];
+                }
             }
-        }
-        double fraction = -1;
-        if (done >= 0 && total > 0) fraction = MIN(1.0, (double)done / total);
-        else if (stage && ([stage hasPrefix:@"Installing"] || [stage hasPrefix:@"Downloading"])) {
-            // apt: "dlstatus:<n>:<percent>:<message>" / "pmstatus:<package>:<percent>:<message>"
-            NSString *status = [[[NSString stringWithContentsOfURL:statusURL encoding:NSUTF8StringEncoding error:nil] ?: @"" stringByTrimmingCharactersInSet:NSCharacterSet.newlineCharacterSet] componentsSeparatedByString:@"\n"].lastObject;
-            NSArray *f = [status componentsSeparatedByString:@":"];
-            if (f.count >= 4 && ([f[0] isEqual:@"dlstatus"] || [f[0] isEqual:@"pmstatus"])) {
-                fraction = MAX(0, MIN(1.0, [f[2] doubleValue] / 100.0));
-                detail = [[f subarrayWithRange:NSMakeRange(3, f.count - 3)] componentsJoinedByString:@":"];
-                if ([f[0] isEqual:@"dlstatus"] && [stage hasPrefix:@"Installing"]) detail = [@"Downloading: " stringByAppendingString:detail];
+            double fraction = -1;
+            if (done >= 0 && total > 0) fraction = MIN(1.0, (double)done / total);
+            else if (stage && ([stage hasPrefix:@"Installing"] || [stage hasPrefix:@"Downloading"])) {
+                // apt: "dlstatus:<n>:<percent>:<message>" / "pmstatus:<package>:<percent>:<message>"
+                NSString *status = [[LRDiagnosticTailString(LRReadDiagnosticTail(statusURL,8192)) ?: @"" stringByTrimmingCharactersInSet:NSCharacterSet.newlineCharacterSet] componentsSeparatedByString:@"\n"].lastObject;
+                NSArray *f = [status componentsSeparatedByString:@":"];
+                if (f.count >= 4 && ([f[0] isEqual:@"dlstatus"] || [f[0] isEqual:@"pmstatus"])) {
+                    fraction = MAX(0, MIN(1.0, [f[2] doubleValue] / 100.0));
+                    detail = [[f subarrayWithRange:NSMakeRange(3, f.count - 3)] componentsJoinedByString:@":"];
+                    if ([f[0] isEqual:@"dlstatus"] && [stage hasPrefix:@"Installing"]) detail = [@"Downloading: " stringByAppendingString:detail];
+                }
             }
-        }
-        NSString *result = [[NSString stringWithContentsOfURL:resultURL encoding:NSUTF8StringEncoding error:nil] stringByTrimmingCharactersInSet:NSCharacterSet.whitespaceAndNewlineCharacterSet];
-        if (installer.sessionPid <= 0 && !endedAt) endedAt = NSDate.date;
-        NSTimeInterval elapsed = -[start timeIntervalSinceNow];
-        BOOL finished = result.length || (endedAt && -[endedAt timeIntervalSinceNow] > 5) || elapsed > 3600;
-        if (finished) {
-            [timer invalidate]; (void)installer;
-            LRActiveInstall = nil;
-            [self endAwake:@"installation"];
-            [self logCategory:@"SETUP" event:[NSString stringWithFormat:@"support install finished: %@ result=%@ stage=%@ category=%@ seconds=%.0f", title, result ?: @"none", stage ?: @"none", category ?: @"none", elapsed]];
-            if ([result isEqual:@"0"]) {
-                [self postInstall:title phase:@"succeeded" stage:@"Installation complete" detail:@"" fraction:1 elapsed:elapsed error:nil log:nil];
-                completion(nil);
-                return;
-            }
-            NSString *message = category ? LRInstallFailureMessage(category, failureDetail) :
-                result.length ? [NSString stringWithFormat:@"The installation failed at “%@”. Export the Open Desktop Report and try again.", stage ?: @"start"] :
-                endedAt ? @"The installer stopped before finishing. Try again; if it repeats, export the Open Desktop Report." :
-                @"The installation did not finish within an hour. Restart LinuxRunner and try again.";
-            NSArray *lines = [log componentsSeparatedByString:@"\n"];
-            NSString *tail = [[lines subarrayWithRange:NSMakeRange(lines.count > 25 ? lines.count - 25 : 0, MIN((NSUInteger)25, lines.count))] componentsJoinedByString:@"\n"];
-            [self postInstall:title phase:@"failed" stage:stage ?: @"Starting" detail:detail fraction:-1 elapsed:elapsed error:message log:tail];
-            completion(lrError(EIO, message));
-            return;
-        }
-        if (stage && ![stage isEqual:reported]) { reported = stage; progress(stage); }
-        [self postInstall:title phase:@"running" stage:stage ?: @"Waiting for the package manager" detail:detail fraction:fraction elapsed:elapsed error:nil log:nil];
+            NSString *result = [LRDiagnosticTailString(LRReadDiagnosticTail(resultURL,128)) stringByTrimmingCharactersInSet:NSCharacterSet.whitespaceAndNewlineCharacterSet];
+            dispatch_async(dispatch_get_main_queue(), ^{
+                reading=NO;
+                if (installer.sessionPid <= 0 && !endedAt) endedAt = NSDate.date;
+                NSTimeInterval elapsed = -[start timeIntervalSinceNow];
+                BOOL finished = result.length || (endedAt && -[endedAt timeIntervalSinceNow] > 5);
+                if (finished) {
+                    [timer invalidate]; (void)installer;
+                    LRActiveInstall = nil; LRActiveInstallCancelURL=nil;
+                    [NSFileManager.defaultManager removeItemAtURL:cancelURL error:nil];
+                    [self endAwake:@"installation"];
+                    [self logCategory:@"SETUP" event:[NSString stringWithFormat:@"support install finished: %@ result=%@ stage=%@ category=%@ seconds=%.0f", title, result ?: @"none", stage ?: @"none", category ?: @"none", elapsed]];
+                    if ([result isEqual:@"0"]) {
+                        [self postInstall:title phase:@"succeeded" stage:@"Installation complete" detail:@"" fraction:1 elapsed:elapsed error:nil log:nil];
+                        completion(nil);
+                        return;
+                    }
+                    NSString *message = category ? LRInstallFailureMessage(category, failureDetail) :
+                        result.length ? [NSString stringWithFormat:@"The installation failed at “%@”. Export Desktop Report and try again.", stage ?: @"start"] :
+                        @"The installer stopped before finishing. Try again; if it repeats, export the desktop report.";
+                    NSArray *lines = [log componentsSeparatedByString:@"\n"];
+                    NSString *tail = [[lines subarrayWithRange:NSMakeRange(lines.count > 25 ? lines.count - 25 : 0, MIN((NSUInteger)25, lines.count))] componentsJoinedByString:@"\n"];
+                    [self postInstall:title phase:@"failed" stage:stage ?: @"Starting" detail:detail fraction:-1 elapsed:elapsed error:message log:tail];
+                    completion(lrError(EIO, message));
+                    return;
+                }
+                if (stage && ![stage isEqual:reported]) { reported = stage; progress(stage); }
+                [self postInstall:title phase:@"running" stage:stage ?: @"Waiting for the package manager" detail:detail fraction:fraction elapsed:elapsed error:nil log:nil];
+            });
+        });
     }];
 }
 
@@ -1455,7 +1473,7 @@ static NSCountedSet<NSString *> *LRAwakeSet;
     BOOL shadow = self.activeEnvironmentIsDebian || self.activeEnvironmentIsArch;
     NSString *remove = LRAccountTool(shadow ? @[@"/usr/sbin/userdel", @"/usr/bin/userdel"] :
         @[@"/usr/sbin/deluser", @"/sbin/deluser", @"/usr/bin/deluser", @"/bin/deluser"]);
-    if (!remove) { if(error)*error=lrError(ENOENT,@"The distribution's account-removal tool is missing. Install it using Package Center."); return nil; }
+    if (!remove) { if(error)*error=lrError(ENOENT,@"The distribution's account-removal tool is missing. Install it using App Manager."); return nil; }
     // No --force / --remove-home: the real guest tool owns account locks,
     // active-process checks and passwd/group/shadow updates. Keep user files.
     NSArray *command = shadow ? @[remove,@"--",name] : @[remove,name];
@@ -1472,6 +1490,7 @@ static NSCountedSet<NSString *> *LRAwakeSet;
 }
 + (NSURL *)prepareApplicationSupport:(NSError **)error { return [LRGUIViewController prepareSupport:error]; }
 + (void)resetGraphicalSessions {
+    [self stopDesktopSession];
     NSURL *base=[[self exchangeURL:self.activeRootName] URLByAppendingPathComponent:@".linuxrunner/gui"];
     for(NSURL *url in [NSFileManager.defaultManager contentsOfDirectoryAtURL:base includingPropertiesForKeys:@[NSURLIsDirectoryKey,NSURLIsSymbolicLinkKey] options:0 error:nil]) {
         if(![url.lastPathComponent hasPrefix:@"session-"])continue;

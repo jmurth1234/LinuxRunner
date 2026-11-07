@@ -61,6 +61,7 @@
 
 @property BOOL ignoreKeyboardMotion;
 @property int runnerLaunchError;
+@property(copy) NSString *runnerAccountFailure;
 @property (nonatomic) BOOL hasExternalKeyboard;
 
 @end
@@ -199,6 +200,7 @@
 - (void)reportLaunchError:(int)code {
     NSString *reason;
     switch (code) {
+        case _ESRCH: reason = self.runnerAccountFailure ?: @"The selected Linux user is unavailable. Choose a user in Settings > Linux Users."; break;
         case _ENOENT: reason = @"The executable or its required ELF interpreter is missing. Check the command and installed packages."; break;
         case _ENOEXEC: reason = @"This file is not a supported ARM64 Linux executable or script."; break;
         case _EACCES: reason = @"The executable cannot be read or executed. Check guest permissions."; break;
@@ -238,6 +240,7 @@
 }
 
 - (int)startSession {
+    self.runnerAccountFailure=nil;
     NSArray<NSString *> *command = self.runnerCommand ?: UserPreferences.shared.launchCommand;
 #ifdef LINUXRUNNER
     if (!self.runnerCommand && ([LRRuntimeBridge activeEnvironmentIsDebian] || [LRRuntimeBridge activeEnvironmentIsArch])) command = @[@"/bin/bash", @"-l"];
@@ -246,7 +249,8 @@
         NSArray<NSString *> *login = [LRRuntimeBridge defaultLinuxLoginCommand:&accountError];
         if (accountError) {
             [LRRuntimeBridge logCategory:@"ACCOUNT" event:@"Selected login account unavailable; refusing root fallback"];
-            return _ENOENT;
+            self.runnerAccountFailure=accountError.localizedDescription;
+            return _ESRCH;
         }
         if (login) command = login;
     }

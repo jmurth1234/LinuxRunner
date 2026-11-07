@@ -87,7 +87,7 @@ check() {
     cat profile-check.result
 }
 
-stage() { echo "PROFILE_STAGE: $1"; }
+stage() { support_install_checkpoint; echo "PROFILE_STAGE: $1"; }
 apt_log=/tmp/linuxrunner-profile-apt.$$
 # The real reason of a package failure, from the package manager's output:
 #   PROFILE_FAILURE: category=<CATEGORY> stage=<what> detail=<first matching line>
@@ -118,6 +118,7 @@ classify_failure() {
 }
 
 install_packages() {
+    support_install_checkpoint
     # $1 = label, rest = Debian packages -- Alpine packages -- Arch Linux ARM packages
     label=$1; shift
     debian= alpine= arch= side=debian

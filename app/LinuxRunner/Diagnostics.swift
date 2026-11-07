@@ -295,6 +295,7 @@ import SwiftUI
         lastBanner = Date()
         let button = UIButton(type: .system)
         button.setTitle(report.summary + "  ·  Details", for: .normal)
+        button.titleLabel?.adjustsFontForContentSizeCategory = true
         button.titleLabel?.numberOfLines = 3; button.titleLabel?.font = .preferredFont(forTextStyle: .footnote)
         button.backgroundColor = .secondarySystemBackground; button.layer.cornerRadius = 12
         button.contentEdgeInsets = UIEdgeInsets(top: 12, left: 14, bottom: 12, right: 14)
@@ -307,9 +308,20 @@ import SwiftUI
             let controller = UIHostingController(rootView: NavigationView { GuestCrashDetailView(report: report, dismissible: true) })
             presenter.present(controller, animated: true)
         }, for: .touchUpInside)
-        window.addSubview(button)
-        NSLayoutConstraint.activate([button.topAnchor.constraint(equalTo: window.safeAreaLayoutGuide.topAnchor, constant: 8), button.leadingAnchor.constraint(equalTo: window.safeAreaLayoutGuide.leadingAnchor, constant: 12), button.trailingAnchor.constraint(equalTo: window.safeAreaLayoutGuide.trailingAnchor, constant: -12)])
-        DispatchQueue.main.asyncAfter(deadline: .now() + 10) { [weak button] in button?.removeFromSuperview() }
+        let close = UIButton(type: .system)
+        close.setImage(UIImage(systemName: "xmark"), for: .normal)
+        close.accessibilityLabel = "Dismiss crash notice"
+        close.widthAnchor.constraint(greaterThanOrEqualToConstant: 44).isActive = true
+        close.heightAnchor.constraint(greaterThanOrEqualToConstant: 44).isActive = true
+        let banner = UIStackView(arrangedSubviews: [button, close])
+        banner.backgroundColor = .secondarySystemBackground
+        banner.layer.cornerRadius = 12; banner.translatesAutoresizingMaskIntoConstraints = false
+        close.addAction(UIAction { [weak banner] _ in banner?.removeFromSuperview() }, for: .touchUpInside)
+        button.addAction(UIAction { [weak banner] _ in banner?.removeFromSuperview() }, for: .touchUpInside)
+        window.addSubview(banner)
+        NSLayoutConstraint.activate([banner.topAnchor.constraint(equalTo: window.safeAreaLayoutGuide.topAnchor, constant: 60), banner.leadingAnchor.constraint(equalTo: window.safeAreaLayoutGuide.leadingAnchor, constant: 12), banner.trailingAnchor.constraint(equalTo: window.safeAreaLayoutGuide.trailingAnchor, constant: -12)])
+        UIAccessibility.post(notification: .announcement, argument: report.summary)
+        DispatchQueue.main.asyncAfter(deadline: .now() + 10) { [weak banner] in banner?.removeFromSuperview() }
     }
 }
 @objc(LRDiagnosticCenter) final class DiagnosticCenter: NSObject {

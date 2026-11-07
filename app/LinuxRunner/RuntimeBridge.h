@@ -137,6 +137,8 @@ void LRSetDatalessMaterialization(void);
 /// True while a support installation (account tools, desktop, KDE) runs; a
 /// second one is refused until it finishes.
 + (BOOL)installationRunning;
+// Stop between installation stages. Do not interrupt the package manager.
++ (BOOL)cancelSupportInstallation:(NSError **)error;
 // Keep Screen Awake During Operations (setting LinuxRunner.keepScreenAwake,
 // default on): reasons are reference-counted; while any is active the idle
 // timer is off. The only writer of UIApplication.idleTimerDisabled (the older

@@ -6,12 +6,33 @@ import AVFoundation
 import Network
 import Darwin
 
+@MainActor enum EnvironmentNames {
+    static var values: [String: String] = [:]
+    static func name(_ root: String) -> String { values[root] ?? root }
+}
+
+enum EnvironmentOperation: String {
+    case create = "Preparing environment…", remove = "Removing environment…", transfer = "Transferring files…"
+}
+
 @MainActor final class EnvironmentManager: ObservableObject {
+    static let shared = EnvironmentManager()
     @Published var environments: [LinuxEnvironment] = []
     @Published var storage: [UUID: Int64] = [:]
     @Published var error: String?
+    @Published var notice: String?
     // Environment create/import/remove/install in progress (also keeps the screen awake).
-    @Published var busy = false { didSet { if busy != oldValue { busy ? LRRuntimeBridge.beginAwake("environment-operation") : LRRuntimeBridge.endAwake("environment-operation") } } }
+    @Published var operation: EnvironmentOperation? {
+        didSet {
+            if oldValue == nil && operation != nil { LRRuntimeBridge.beginAwake("environment-operation") }
+            if oldValue != nil && operation == nil { LRRuntimeBridge.endAwake("environment-operation") }
+        }
+    }
+    var busy: Bool {
+        get { operation != nil }
+        set { operation = newValue ? (operation ?? .create) : nil }
+    }
+    private(set) var needsInitialSetup = false
     @Published var detected: [LinuxApplication] = []
     @Published var graphical: [LinuxApplication] = []
     @Published var discovering = false
@@ -22,9 +43,10 @@ import Darwin
     private var catalogWritable = true
     private var observers: [NSObjectProtocol] = []
 
-    init() {
+    private init() {
         do {
             let url = LRRuntimeBridge.catalogURL()
+            needsInitialSetup = !FileManager.default.fileExists(atPath: url.path) && !UserDefaults.standard.bool(forKey: "LinuxRunnerSetup.offered")
             if FileManager.default.fileExists(atPath: url.path) {
                 environments = try EnvironmentCatalog.read(url).environments
             }
@@ -53,21 +75,23 @@ import Darwin
     func persist() throws {
         guard catalogWritable else { throw EnvironmentError.invalidMetadata }
         try EnvironmentCatalog(environments: environments).write(LRRuntimeBridge.catalogURL())
+        EnvironmentNames.values = Dictionary(environments.map { ($0.rootfsName, $0.name) }, uniquingKeysWith: { first, _ in first })
     }
     func refresh() {
-        detected = LRRuntimeBridge.isRunning() ? LRRuntimeBridge.discoverApplications().compactMap { item in
-            guard let name = item["name"], let command = item["command"] else { return nil }
-            return LinuxApplication(name: name, command: command)
-        } : []
         if !discovering {
             discovering = true
             let root = LRRuntimeBridge.activeRootName()
             DispatchQueue.global(qos: .utility).async { [weak self] in
+                let detected = LRRuntimeBridge.isRunning() ? LRRuntimeBridge.discoverApplications() : []
                 let entries = LRRuntimeBridge.isRunning() ? LRRuntimeBridge.discoverGraphicalApplications() : []
                 DispatchQueue.main.async {
                     guard let self else { return }
                     self.discovering = false
                     guard root == LRRuntimeBridge.activeRootName() else { return }
+                    self.detected = detected.compactMap { item in
+                        guard let name = item["name"], let command = item["command"] else { return nil }
+                        return LinuxApplication(name: name, command: command)
+                    }
                     var icons: [String: UIImage] = [:]
                     self.graphical = entries.compactMap { item in
                         guard let name = item["name"] as? String, let executable = item["executable"] as? String,
@@ -101,14 +125,14 @@ import Darwin
         for index in environments.indices {
             environments[index].storageBytes = measured[environments[index].id]
             if active(environments[index]) {
-                environments[index].lastBootResult = "Runtime running; application acceptance recorded separately"
+                environments[index].lastBootResult = "Running"
                 if ["debian", "arch"].contains(environments[index].distributionID ?? "") {
                     environments[index].installationState = FileManager.default.fileExists(atPath: LRRuntimeBridge.rootURL(environments[index].rootfsName).appendingPathComponent("data/var/lib/linuxrunner/initialized").path) ? "Base packages configured" : "First-start configuration pending; setup may require repair"
                     let support = LRRuntimeBridge.exchangeURL(environments[index].rootfsName).appendingPathComponent(".linuxrunner/gui")
                     if let profile = try? String(contentsOf: support.appendingPathComponent("profile-check.result"), encoding: .utf8) {
                         let first = profile.components(separatedBy: .newlines).first ?? ""
                         environments[index].desktopAvailability = first == "ready" ? "Components verified; session startup checked separately" : first
-                        environments[index].guiAvailability = first == "ready" ? "X11 components verified" : "Desktop profile requires repair"
+                        environments[index].guiAvailability = first == "ready" ? "Display components verified" : "Desktop profile requires repair"
                     }
                 }
             }
@@ -149,7 +173,7 @@ import Darwin
         let previous = environments
         environments.removeAll { $0.id == environment.id }
         do { try persist() } catch { environments = previous; self.error = error.localizedDescription; return }
-        busy = true
+        operation = .remove
         LRRuntimeBridge.removeEnvironment(environment.rootfsName) { [weak self] failure in
             Task { @MainActor in
             guard let self else { return }
@@ -250,7 +274,7 @@ private struct LinuxUsersView: View {
     @State private var username = ""
     @State private var session: TerminalPresentation?
     @State private var error: String?
-    @State private var confirmCreate = false
+    @State private var notice: String?
     @State private var confirmRemove = false
     @State private var removeName = ""
     @State private var newPassword = ""
@@ -271,7 +295,7 @@ private struct LinuxUsersView: View {
     var body: some View {
         List {
             Section("Active Linux Environment") {
-                Text(LRRuntimeBridge.activeRootName()).font(.caption).foregroundColor(.secondary)
+                Text(EnvironmentNames.name(LRRuntimeBridge.activeRootName())).font(.caption).foregroundColor(.secondary)
                 Text("New ordinary terminals log in as the selected user using the distribution's su. Existing terminals, managed desktops and administrative/package launches retain their identity.").font(.footnote)
                 Text("Linux UID permissions apply inside LinuxRunner. Accounts do not create separate iOS security identities.").font(.footnote).foregroundColor(.secondary)
             }
@@ -285,7 +309,7 @@ private struct LinuxUsersView: View {
                     }
                 }
                 Button("Use for New Sessions") {
-                    do { _ = try LRRuntimeBridge.setDefaultLinuxUser(selected) }
+                    do { _ = try LRRuntimeBridge.setDefaultLinuxUser(selected); notice = "New sessions will use " + selected + "." }
                     catch { self.error = error.localizedDescription }
                 }.disabled(!running || !accounts.contains(where: { $0["name"] == selected }))
                 Button("Open Login Terminal") {
@@ -293,6 +317,7 @@ private struct LinuxUsersView: View {
                     catch { self.error = error.localizedDescription }
                 }.disabled(!running || !accounts.contains(where: { $0["name"] == selected }))
             }
+            if let notice { Section { Text(notice).foregroundColor(.secondary) } }
             Section("Create Linux User") {
                 TextField("Username", text: $username).autocorrectionDisabled().textInputAutocapitalization(.never).textContentType(.username)
                 SecureField("Password", text: $newPassword).textContentType(.newPassword)
@@ -308,12 +333,12 @@ private struct LinuxUsersView: View {
                     VStack(alignment: .leading, spacing: 6) {
                         Text(account["name"] ?? "").font(.headline)
                         Text("UID \(account["uid"] ?? "") · GID \(account["gid"] ?? "") · \(account["home"] ?? "")").font(.caption)
-                        Button("Set Password…") { passwordFor = PasswordTarget(name: account["name"] ?? "") }.disabled(!running)
+                        Button("Set Password…") { passwordFor = PasswordTarget(name: account["name"] ?? "") }.buttonStyle(.borderless).disabled(!running || creating != nil)
                         if (Int(account["uid"] ?? "") ?? 0) >= 1000 {
                             Button("Remove Account — Keep Home…", role: .destructive) {
                                 removeName = account["name"] ?? ""
                                 confirmRemove = true
-                            }.disabled(!running || account["name"] == LRRuntimeBridge.defaultLinuxUser())
+                            }.buttonStyle(.borderless).disabled(!running || creating != nil || account["name"] == LRRuntimeBridge.defaultLinuxUser())
                         }
                     }
                 }
@@ -325,12 +350,6 @@ private struct LinuxUsersView: View {
         .navigationTitle("Linux Users")
         .onAppear(perform: refresh)
         .sheet(item: $passwordFor) { target in SetPasswordSheet(name: target.name) }
-        .confirmationDialog("Create \(username) in the active Linux environment?", isPresented: $confirmCreate, titleVisibility: .visible) {
-            Button("Create User") {
-                do { session = TerminalPresentation(controller: try LRRuntimeBridge.createLinuxUser(username)) }
-                catch { self.error = error.localizedDescription }
-            }
-        }
         .confirmationDialog("Remove \(removeName) and keep its home?", isPresented: $confirmRemove, titleVisibility: .visible) {
             Button("Remove Account — Keep Home", role: .destructive) {
                 do { session = TerminalPresentation(controller: try LRRuntimeBridge.removeLinuxUserKeepingHome(removeName)) }
@@ -355,10 +374,12 @@ private struct TerminalPresentation: Identifiable {
 }
 
 struct ManagerView: View {
-    @StateObject private var manager = EnvironmentManager()
+    @StateObject private var manager = EnvironmentManager.shared
     let terminal: TerminalViewController
     @State private var selectedTab = 0
     @State private var desktopSummary: [String: Any] = [:]
+    @State private var graphicsSnapshot: [String: Any] = [:]
+    @State private var loadingGraphics = false
     @State private var confirmStopDesktop = false
     @State private var startingRuntime = false
     @State private var autoStartRuntime = LRRuntimeBridge.autoStart()
@@ -372,20 +393,17 @@ struct ManagerView: View {
     /// flags read only inside the content closure were captured stale, and
     /// Open Desktop showed the Standalone GUI Test (IPA 889–891 device reports).
     @State private var graphical: GraphicalRequest?
+    @State private var desktopLease = DesktopPresentationLease()
     @State private var desktopAfterSetup = false
     @State private var setup = false
     @AppStorage("LinuxRunnerSetup.step") private var setupStep = "welcome"
     @State private var diagnostics = false
+    @State private var exportingDesktopReport = false
     @State private var desktopSettings = false
-    @State private var settings = false
-    @State private var importer = false
+    @State private var deferredDesktopAction: String?
     @State private var session: TerminalPresentation?
     @State private var share: ExportItem?
-    @State private var importRoot: String?
-    @State private var selectedEnvironment: LinuxEnvironment?
     @State private var removeTarget: LinuxEnvironment?
-    @State private var showDetail = false
-    @State private var showFiles = false
     @Environment(\.scenePhase) private var phase
 
     var body: some View {
@@ -399,7 +417,7 @@ struct ManagerView: View {
             NavigationView { preferences }.navigationViewStyle(.stack)
                 .tabItem { Label("Settings", systemImage: "slider.horizontal.3") }.tag(3)
         }
-        .overlay(alignment: .bottom) { InstallProgressCard() }
+        .safeAreaInset(edge: .bottom, spacing: 0) { InstallProgressCard() }
         .accentColor(Color(red: 0.36, green: 0.68, blue: 0.98))
         .preferredColorScheme(appearance == "system" ? nil : appearance == "light" ? .light : .dark)
         .onAppear {
@@ -408,7 +426,7 @@ struct ManagerView: View {
             // Once per launch, so "Later" is respected.
             // Only when there is no Linux at all, or a setup the user started is
             // waiting for its restart; never for an existing, usable installation.
-            if !SetupAutoPresentation.shown && (manager.environments.isEmpty || (setupStep == "relaunch" && LRRuntimeBridge.isRunning() && LRRuntimeBridge.activeRootName() == UserDefaults.standard.string(forKey: "LinuxRunnerSetup.root"))) { SetupAutoPresentation.shown = true; setup = true }
+            if !SetupAutoPresentation.shown && (manager.needsInitialSetup || manager.environments.isEmpty || (setupStep == "relaunch" && LRRuntimeBridge.isRunning() && LRRuntimeBridge.activeRootName() == UserDefaults.standard.string(forKey: "LinuxRunnerSetup.root"))) { SetupAutoPresentation.shown = true; UserDefaults.standard.set(true, forKey: "LinuxRunnerSetup.offered"); setup = true }
         }
         #if targetEnvironment(simulator)
         .onAppear { SimulatorWorkflow.start(desktop: openDesktop, guiTest: openGUITest, manager: manager,
@@ -425,32 +443,36 @@ struct ManagerView: View {
             Button("Cancel", role: .cancel) { }
             Button("Stop", role: .destructive) { LRRuntimeBridge.stopDesktopSession(); refreshDesktopSummary() }
         } message: { Text("Save documents first. This closes applications owned by the desktop; persistent files and the terminal environment remain.") }
-        .fullScreenCover(item: $graphical) { request in NativeController(controller: presentedController(request)) }
+        .fullScreenCover(item: $graphical, onDismiss: {
+            if GraphicalRequest.desktopOwner === desktopLease { GraphicalRequest.desktopOwner = nil }
+        }) { request in NativeController(controller: presentedController(request)) }
         .sheet(isPresented: $diagnostics) { DeveloperDiagnosticsView() }
-        .sheet(isPresented: $desktopSettings) {
+        .sheet(isPresented: $desktopSettings, onDismiss: {
+            guard let action = deferredDesktopAction else { return }
+            deferredDesktopAction = nil
+            if action == "start" { openDesktop() }
+            else if let navigation = LRRuntimeBridge.desktopControllerIfCreated() as? UINavigationController,
+                    let viewer = navigation.viewControllers.first as? LRGUIViewController { viewer.performDesktopAction(action) }
+        }) {
             if let navigation = LRRuntimeBridge.desktopController() as? UINavigationController,
                let viewer = navigation.viewControllers.first as? LRGUIViewController {
-                DesktopControlSettings(controller: viewer, openDesktop: openDesktop)
+                DesktopControlSettings(controller: viewer, managerAction: { deferredDesktopAction = $0 })
             }
         }
         .fullScreenCover(item: $session) { item in
             TerminalScreen(controller: item.controller)
         }
         .sheet(item: $share) { item in ShareView(item: item) }
-        .fileImporter(isPresented: $importer, allowedContentTypes: [.data], allowsMultipleSelection: false) { result in
-            guard let root = importRoot else { return }
-            transfer(result: result, root: root)
-        }
-        .alert("LinuxRunner", isPresented: Binding(get: { manager.error != nil }, set: { if !$0 { DispatchQueue.main.async { manager.error = nil } } })) {
-            Button("OK") { manager.error = nil }
-        } message: { Text(manager.error ?? "") }
+        .alert("LinuxRunner", isPresented: Binding(get: { manager.error != nil || manager.notice != nil }, set: { if !$0 { DispatchQueue.main.async { manager.error = nil; manager.notice = nil } } })) {
+            Button("OK") { manager.error = nil; manager.notice = nil }
+        } message: { Text(manager.error ?? manager.notice ?? "") }
         .alert("Remove \(removeTarget?.name ?? "Environment")?", isPresented: Binding(get: { removeTarget != nil }, set: { if !$0 { removeTarget = nil } }), presenting: removeTarget) { target in
             Button("Remove Environment", role: .destructive) { manager.remove(target) }.accessibilityIdentifier("Confirm Remove Environment")
             Button("Cancel", role: .cancel) { }
         } message: { target in
             Text("This deletes \(target.name), its Linux accounts, packages, files and shared files stored in this app. Files in external shared folders are kept. This cannot be undone.")
         }
-        .onChange(of: phase) { _ in manager.refresh() }
+        .onChange(of: phase) { if $0 == .active { manager.refresh() } }
     }
     private var activeEnvironment: LinuxEnvironment? { manager.environments.first(where: manager.active) }
     @AppStorage("LinuxRunnerGraphics.mode") private var graphicsMode = "mesa"
@@ -459,7 +481,7 @@ struct ManagerView: View {
         // The Linux GPU device (Metal, virgl) when this run actually has it.
         if LRRuntimeBridge.virglActive() { return "Metal GPU · Experimental" }
         let requested = graphicsMode == "mesa-metal-resident" ? "GPU-Resident Metal" : graphicsMode == "mesa-metal-verify" ? "Metal Verification" : "Software"
-        guard let routing = LRRuntimeBridge.graphicsSummary()["routing"] as? String else { return requested }
+        guard let routing = graphicsSnapshot["routing"] as? String else { return requested }
         if routing.contains("reason=") { return requested + " · fell back to software" }
         return routing.contains("active=mesa ") || routing.hasSuffix("active=mesa") ? "Software" : requested + " · active"
     }
@@ -467,17 +489,39 @@ struct ManagerView: View {
         HStack { Label(title, systemImage: systemImage); Spacer(); Text(value).font(.callout).foregroundColor(color).lineLimit(1) }
     }
     private func refreshDesktopSummary() {
+        if !loadingGraphics {
+            loadingGraphics = true
+            Task.detached(priority: .utility) {
+                let snapshot = LRRuntimeBridge.graphicsSummary()
+                await MainActor.run {
+                    if !NSDictionary(dictionary: graphicsSnapshot).isEqual(to: snapshot) { graphicsSnapshot = snapshot }
+                    loadingGraphics = false
+                }
+            }
+        }
         var latest = LRRuntimeBridge.desktopSessionSummary()
         // Audio counters have their own settings view. They must not refresh every tab.
         latest.removeValue(forKey: "audio")
         if !NSDictionary(dictionary: desktopSummary).isEqual(to: latest) { desktopSummary = latest }
     }
+    private var desktopStopping: Bool { desktopSummary["stopping"] as? Bool == true }
     private var desktopAlive: Bool { desktopSummary["alive"] as? Bool == true }
     private var recentApplications: [LinuxApplication] {
         let keys = UserDefaults.standard.stringArray(forKey: "LinuxRunner.launcher." + LRRuntimeBridge.activeRootName() + ".recent") ?? []
         return keys.prefix(6).compactMap { key in manager.graphical.first { $0.launchKey == key } }
     }
-    private func openDesktop() { _ = LRRuntimeBridge.desktopTraceBegin("open-desktop button"); graphical = GraphicalRequest(desktop: true, launch: nil) }
+    private func canPresentDesktop() -> Bool {
+        if LRRuntimeBridge.desktopSessionSummary()["stopping"] as? Bool == true {
+            manager.error = "The desktop is stopping. Wait for it to stop before starting another desktop."
+            return false
+        }
+        if GraphicalRequest.desktopOwner != nil || LRRuntimeBridge.desktopControllerIfCreated()?.viewIfLoaded?.window != nil {
+            manager.error = "The desktop is open in another window. Use that window to control the desktop."
+            return false
+        }
+        return true
+    }
+    private func openDesktop() { guard canPresentDesktop() else { return }; GraphicalRequest.desktopOwner = desktopLease; _ = LRRuntimeBridge.desktopTraceBegin("open-desktop button"); graphical = GraphicalRequest(desktop: true, launch: nil) }
     private func openGUITest() { LRRuntimeBridge.desktopTrace("gui-test", result: "info", detail: "Standalone GUI Test opened"); graphical = GraphicalRequest(desktop: false, launch: nil) }
     /// Built when the full-screen cover presents; records which controller the
     /// presentation actually received (desktop or GUI Test) for the timeline.
@@ -513,13 +557,13 @@ struct ManagerView: View {
         List {
             Section {
                 VStack(alignment: .leading, spacing: 10) {
-                    Text("LinuxRunner").font(.system(size: 34, weight: .bold, design: .rounded)).tracking(-1)
-                    Text("Your Linux workspace, on iPhone.").font(.subheadline).foregroundColor(.secondary)
+                    Text("LinuxRunner").font(.system(.largeTitle, design: .rounded).weight(.bold)).tracking(-1)
+                    Text("Your Linux workspace, on this device.").font(.subheadline).foregroundColor(.secondary)
                     HStack(spacing: 7) {
                         Circle().fill(LRRuntimeBridge.isRunning() ? Color.green : Color.orange).frame(width: 6, height: 6)
                         Text(activeEnvironment?.name ?? LRRuntimeBridge.runtimeStatus()).font(.caption)
                         Spacer()
-                        Text("ARM64 · Interpreter").font(.caption2).foregroundColor(.secondary)
+                        Text(LRRuntimeBridge.executionBackendStatus()["active"] as? String == "jit" ? "ARM64 · JIT" : "ARM64 · Interpreter").font(.caption2).foregroundColor(.secondary)
                     }.padding(.top, 8)
                     if !LRRuntimeBridge.isRunning() {
                         Button(action: startRuntime) {
@@ -527,9 +571,9 @@ struct ManagerView: View {
                                 .padding(16).foregroundColor(.white).background(Color(red: 0.12, green: 0.30, blue: 0.52)).cornerRadius(12)
                         }.buttonStyle(.plain).disabled(startingRuntime || !LRRuntimeBridge.canStartRuntime()).accessibilityIdentifier("Start Linux Runtime")
                     } else { Button(action: openDesktop) {
-                        HStack { Image(systemName: "desktopcomputer"); Text(desktopAlive ? "Resume Desktop" : "Open Desktop").fontWeight(.semibold); Spacer(); Image(systemName: "arrow.up.right") }
+                        HStack { Image(systemName: "desktopcomputer"); Text(desktopStopping ? "Stopping Desktop…" : desktopAlive ? "Resume Desktop" : "Open Desktop").fontWeight(.semibold); Spacer(); Image(systemName: "arrow.up.right") }
                             .padding(16).foregroundColor(.white).background(Color(red: 0.12, green: 0.30, blue: 0.52)).cornerRadius(12)
-                    }.buttonStyle(.plain).accessibilityIdentifier("Open Desktop") }
+                    }.buttonStyle(.plain).disabled(desktopStopping).accessibilityIdentifier("Open Desktop") }
                 }.padding(.vertical, 12)
             }
             if LRRuntimeBridge.isRunning() {
@@ -542,23 +586,19 @@ struct ManagerView: View {
             Section("Workspace") {
                 NavigationLink(destination: ApplicationGridView(manager: manager, run: run)) { Label("Applications", systemImage: "square.grid.2x2") }
                 if let environment = activeEnvironment {
-                    NavigationLink(destination: PackageView(environment: environment, enabled: manager.active(environment), run: run, refreshApplications: manager.refresh)) { Label("App Manager", systemImage: "bag") }
+                    NavigationLink(destination: PackageView(manager: manager, environment: environment, enabled: manager.active(environment), run: run, refreshApplications: manager.refresh)) { Label("App Manager", systemImage: "bag") }
                     Button { openTerminal(environment) } label: { Label("Terminal", systemImage: "terminal") }
                     NavigationLink(destination: files(environment)) { Label("Files", systemImage: "folder") }
                 }
             }
-            Section("Recent Application Crashes") {
+            if !GuestCrashCenter.reports().isEmpty { Section("Recent Application Crashes") {
                 NavigationLink(destination: GuestCrashListView()) { Label("View Crash Reports", systemImage: "exclamationmark.bubble") }
-            }
+            } }
             if !recentApplications.isEmpty {
                 Section("Recently Used") { ForEach(recentApplications) { app in Button { run(app) } label: {
                     HStack { if let image = manager.applicationIcons[app.launchKey] { Image(uiImage: image).resizable().scaledToFit().frame(width: 28, height: 28) } else { Image(systemName: "app").frame(width: 28) }; Text(app.name); Spacer(); Image(systemName: "arrow.up.right").font(.caption).foregroundColor(.secondary) }
                 } } }
             }
-            Section("Installed Distributions") { ForEach(manager.environments) { environment in
-                HStack { Image(systemName: "shippingbox").foregroundColor(.accentColor); VStack(alignment: .leading, spacing: 4) { Text(environment.name); Text(manager.size(environment)).font(.caption).foregroundColor(.secondary) }; Spacer(); Text(manager.active(environment) ? "Running" : "Installed").font(.caption).foregroundColor(.secondary) }
-            } }
-            if !LRRuntimeBridge.isRunning() { Section { Text(LRRuntimeBridge.runtimeStatus()).foregroundColor(.orange) } }
         }.listStyle(.insetGrouped).navigationTitle("Home").navigationBarTitleDisplayMode(.inline)
             .toolbar { Button { manager.refresh() } label: { Image(systemName: "arrow.clockwise") }.accessibilityLabel("Refresh") }
     }
@@ -569,13 +609,13 @@ struct ManagerView: View {
                     HStack(spacing: 14) { Image(systemName: "shippingbox.fill").font(.title2).foregroundColor(.accentColor)
                         VStack(alignment: .leading, spacing: 5) { Text(environment.name).font(.headline); Text("ARM64 · " + manager.size(environment)).font(.caption).foregroundColor(.secondary)
                             if LRRuntimeBridge.nextRootName() == environment.rootfsName && !manager.active(environment) { Text("Selected for next launch").font(.caption).foregroundColor(.accentColor) }
-                        }; Spacer(); if manager.active(environment) { Image(systemName: "circle.fill").font(.system(size: 7)).foregroundColor(.green) }
+                        }; Spacer(); if manager.active(environment) { Image(systemName: "circle.fill").font(.system(size: 7)).foregroundColor(.green).accessibilityLabel("Running") }
                     }.padding(.vertical, 6)
                 }
             } }
             Section("Add Environment") {
                 Button { setupStep = "welcome"; setup = true } label: { Label("Set Up Linux…", systemImage: "sparkles") }
-                if manager.busy { ProgressView("Preparing environment…") }
+                if manager.busy { ProgressView(manager.operation?.rawValue ?? "Working…") }
             }
             Section { Text("Each distribution retains its own packages and files. One runtime is active at a time; switching takes effect after relaunch.").font(.footnote).foregroundColor(.secondary) }
         }.listStyle(.insetGrouped).navigationTitle("Distributions")
@@ -586,7 +626,7 @@ struct ManagerView: View {
             Section("Desktop") {
                 Label(desktopSummary["state"] as? String ?? "Stopped", systemImage: "desktopcomputer").font(.headline)
                 if desktopAlive {
-                    Text("Profile: " + (activeEnvironment?.name ?? LRRuntimeBridge.activeRootName())).font(.subheadline)
+                    Text("Environment: " + (activeEnvironment?.name ?? LRRuntimeBridge.activeRootName())).font(.subheadline)
                     if let user = desktopSummary["user"] as? String {
                         Text("Desktop user: " + user).font(.subheadline)
                         if user != LRRuntimeBridge.defaultLinuxUser() { Text("The selected login changed. Save work and stop this desktop before launching applications under the new user.").font(.footnote).foregroundColor(.orange) }
@@ -595,8 +635,8 @@ struct ManagerView: View {
                     if let geometry = desktopSummary["geometry"] as? String { Text("Display: " + geometry).font(.caption).foregroundColor(.secondary) }
                     if let server = desktopSummary["displayServer"] as? String { LabeledContentRow("Display server", value: server) }
                     if let transport = desktopSummary["transport"] as? String { LabeledContentRow("Display transport", value: transport) }
-                    Text(desktopSummary["connected"] as? Bool == true ? "Viewer connected" : "Viewer detached; desktop retained").font(.caption).foregroundColor(.secondary)
-                    Button("Resume Desktop", action: openDesktop)
+                    Text("Returning to Home keeps desktop applications open.").font(.caption).foregroundColor(.secondary)
+                    Button("Resume Desktop", action: openDesktop).disabled(desktopStopping)
                     Button("Stop Desktop", role: .destructive) { confirmStopDesktop = true }
                 } else { Button("Open Desktop", action: openDesktop).disabled(!LRRuntimeBridge.isRunning()) }
                 Text("Navigating away retains windows. iOS may suspend or terminate the app; saved files remain persistent.").font(.footnote).foregroundColor(.secondary)
@@ -630,7 +670,14 @@ struct ManagerView: View {
             }
             Section("Advanced") {
                 NavigationLink(destination: TerminalSettingsView()) { Label("Terminal & Keyboard", systemImage: "keyboard") }
-                Button { LRRuntimeBridge.exportDesktopReport { url in if let url { share = ExportItem(url: url) } } } label: { Label("Export Open Desktop Report", systemImage: "doc.text.magnifyingglass") }
+                Button {
+                    guard !exportingDesktopReport else { return }; exportingDesktopReport = true
+                    LRRuntimeBridge.exportDesktopReport { url in
+                        exportingDesktopReport = false
+                        if let url { share = ExportItem(url: url) }
+                        else { manager.error = "The desktop report could not be exported. Try again." }
+                    }
+                } label: { Label(exportingDesktopReport ? "Exporting Desktop Report…" : "Export Desktop Report", systemImage: "doc.text.magnifyingglass") }.disabled(exportingDesktopReport)
                 Toggle(isOn: $developerMode) { Label("Developer Mode", systemImage: "hammer") }
                 if developerMode {
                     Toggle(isOn: $autoStartRuntime) { Label("Start Runtime on Launch", systemImage: "power") }.onChange(of: autoStartRuntime) { UserDefaults.standard.set($0, forKey: "LinuxRunnerRuntimeAutoStart") }
@@ -654,6 +701,8 @@ struct ManagerView: View {
             try application.validate()
             guard LRRuntimeBridge.isRunning() else { manager.error = LRRuntimeBridge.runtimeStatus(); return }
             if application.displayMode == .application {
+                guard canPresentDesktop() else { return }
+                GraphicalRequest.desktopOwner = desktopLease
                 _ = LRRuntimeBridge.desktopTraceBegin("application launcher")
                 let launch: [String: Any] = ["requestID": UUID().uuidString, "executable": application.command, "arguments": application.arguments,
                     "directory": application.workingDirectory, "environment": application.environment ?? [:]]
@@ -685,11 +734,10 @@ struct ManagerView: View {
                     setup = true
                 }
                 NavigationLink("Application Launcher", destination: ApplicationGridView(manager: manager, run: run))
-                Text("Start GUI support here before running X11 apps. DISPLAY is supplied by the managed session, not a global terminal variable.").font(.caption)
                 if !manager.active(environment) {
                     Button("Use on Next Launch") {
                         LRRuntimeBridge.setNextRootName(environment.rootfsName)
-                        manager.error = "Environment selected. Close LinuxRunner from the app switcher and open it again. Files are preserved."
+                        manager.notice = "Environment selected. Close LinuxRunner from the app switcher and open it again. Files are preserved."
                     }
                 }
                 NavigationLink("Files", destination: files(environment))
@@ -701,7 +749,7 @@ struct ManagerView: View {
                 if let reason = manager.removalBlockReason(environment) {
                     Text(reason).font(.footnote).foregroundColor(.secondary)
                 }
-                if manager.busy { ProgressView("Removing environment…") }
+                if manager.busy { ProgressView(manager.operation?.rawValue ?? "Working…") }
             }
             Section("Applications") {
                 ForEach(manager.environments.first(where: { $0.id == environment.id })?.applications ?? []) { app in
@@ -720,36 +768,22 @@ struct ManagerView: View {
                     }
                 }
             }
-            if manager.active(environment) && !manager.graphical.isEmpty {
-                Section("Installed graphical applications") {
-                    Text("Discovered from this environment's desktop entries. Listed applications have not all been compatibility-tested.").font(.caption)
-                    ForEach(manager.graphical) { app in Button { run(app) } label: { VStack(alignment: .leading) { Text(app.name); if let comment = app.comment, !comment.isEmpty { Text(comment).font(.caption) } } } }
-                    Button("Refresh Applications") { manager.refresh() }
-                }
-            }
             Section("App Manager") {
-                NavigationLink("Install, Manage and Repair Applications", destination: PackageView(environment: environment, enabled: manager.active(environment), run: run, refreshApplications: manager.refresh))
+                NavigationLink("Install, Manage and Repair Applications", destination: PackageView(manager: manager, environment: environment, enabled: manager.active(environment), run: run, refreshApplications: manager.refresh))
             }
         }.navigationTitle(environment.name)
     }
     private func files(_ environment: LinuxEnvironment) -> some View {
         ExchangeFilesView(environment: environment, manager: manager, share: $share)
     }
-    private func transfer(result: Result<[URL], Error>, root: String) {
-        do {
-            guard let source = try result.get().first else { return }
-            manager.busy = true
-            Task.detached {
-                do { try LRRuntimeBridge.importSharedFile(source, relative: "", root: root, control: LRTransferControl()) }
-                catch { await MainActor.run { manager.error = error.localizedDescription } }
-                await MainActor.run { manager.busy = false; manager.refresh() }
-            }
-        } catch { manager.error = error.localizedDescription }
-    }
+
 }
+
+final class DesktopPresentationLease {}
 
 struct GraphicalRequest: Identifiable {
     static var lastTraced: UUID?
+    static weak var desktopOwner: DesktopPresentationLease?
     let id = UUID()
     let desktop: Bool
     let launch: [String: Any]?
@@ -785,21 +819,6 @@ struct TerminalScreen: View {
 
 enum SetupAutoPresentation { static var shown = false }
 
-struct CreateEnvironmentView: View {
-    var create: (String) -> Void
-    @State private var name = "Alpine Linux"
-    @Environment(\.dismiss) private var dismiss
-    var body: some View {
-        NavigationView {
-            Form {
-                TextField("Environment name", text: $name)
-                Text("Alpine 3.24.2 ARM64 from the verified bundled image. Debian and Ubuntu support is planned.")
-                Button("Create Environment") { create(name.trimmingCharacters(in: .whitespacesAndNewlines)); dismiss() }
-            }.navigationTitle("New Environment").toolbar { Button("Cancel") { dismiss() } }
-        }.navigationViewStyle(.stack)
-    }
-}
-
 struct LauncherEditor: View {
     var save: (LinuxApplication) -> Void
     @State private var name = ""
@@ -824,7 +843,7 @@ struct LauncherEditor: View {
             }
             if displayMode == .application {
                 TextField("Environment as JSON object", text: $environment).autocorrectionDisabled().textInputAutocapitalization(.never)
-                Text("DISPLAY and Xauthority are set for each GUI session. Install GUI Support before launching X11 applications.").font(.caption)
+                Text("Open Desktop prepares the display components and sets the session display variables.").font(.caption)
                 Picker("Renderer", selection: $graphicsMode) {
                     Text("Settings Default").tag("")
                     Text("Software (Mesa)").tag("software")
@@ -901,18 +920,23 @@ private struct CatalogRow: View {
     }
 }
 struct PackageView: View {
+    @ObservedObject var manager: EnvironmentManager
     let environment: LinuxEnvironment
     let enabled: Bool
     var run: (LinuxApplication) -> Void
     var refreshApplications: () -> Void
     @State private var query = ""
     @State private var packages: [LinuxPackageRecord] = []
-    @State private var apps: [LinuxApplication] = []
+    private var apps: [LinuxApplication] { enabled ? manager.graphical : [] }
     @State private var previousResult = ""
     @State private var details = ""
     @State private var log = ""
     @State private var status = "No package operation requested"
     @State private var pendingOperation: String?
+    @State private var pendingPackage = ""
+    @State private var confirmReset = false
+    @State private var loadingResults = false
+    @State private var exporting = false
     @State private var showConfirmation = false
     @State private var error: String?
     @State private var share: ExportItem?
@@ -929,7 +953,7 @@ struct PackageView: View {
                 Section {
                     ForEach(CatalogApplication.debian.filter { query.isEmpty || $0.name.localizedCaseInsensitiveContains(query) || $0.package.contains(query.lowercased()) }) { item in
                         CatalogRow(item: item, installed: apps.first { ($0.command as NSString).lastPathComponent == item.executable }, enabled: enabled,
-                                   install: { query = item.package; confirm("install") }, launch: run)
+                                   install: { confirm("install", package: item.package) }, launch: run)
                     }
                 } header: { Text("App Catalog") } footer: {
                     Text("Verified: passed LinuxRunner's automated Mac tests. Partial: works with known gaps. Experimental: works in testing with open issues. Untested: no test evidence yet. Installation uses Debian's package manager in a Linux terminal.")
@@ -961,71 +985,84 @@ struct PackageView: View {
                 }
             }
             if !details.isEmpty { Section("Package Details") { Text(details).font(.caption).textSelection(.enabled) } }
-            Section("Installed Graphical Applications") {
-                Button("Refresh Applications") { loadApplications() }
-                ForEach(apps) { app in Button("Launch " + app.name) { run(app) } }
-                Text("Detected from this environment's desktop entries; discovery does not guarantee runtime compatibility. Use Create Launcher for programs without desktop entries.").font(.caption)
+            Section("Applications") {
+                NavigationLink("Open Applications", destination: ApplicationGridView(manager: manager, run: run))
             }.disabled(!enabled)
             Section("Repair Center") {
                 Button("Diagnose Package State") { execute("diagnose") }
                 Button("Check Dependencies") { execute("dependencies") }
                 if environment.distributionID == "debian" { Button("Configure Interrupted Debian Packages") { confirm("configure") } }
                 Button("Check / Repair Package State") { confirm("repair") }
-                Button("Reset GUI Sessions") { LRRuntimeBridge.resetGraphicalSessions(); refreshApplications() }
+                Button("Stop All Desktop Sessions…", role: .destructive) { confirmReset = true }
                 Text("Repair runs native maintainer scripts and keeps a package-database metadata checkpoint inside Linux. It is not a full snapshot or automatic rollback. APT dependency repair asks for confirmation before changing packages. Safe diagnostic mode: use Diagnose and Check Dependencies before repair.").font(.caption)
             }.disabled(!enabled)
             Section("Diagnostics") {
                 if !log.isEmpty { Text(log).font(.system(.caption, design: .monospaced)).textSelection(.enabled) }
                 Button("Export Diagnostic Report") {
-                    do { share = ExportItem(url: try LRRuntimeBridge.exportFullDiagnosticBundle()) } catch { self.error = error.localizedDescription }
+                    guard !exporting else { return }; exporting = true
+                    Task.detached {
+                        do { let url = try LRRuntimeBridge.exportFullDiagnosticBundle(); await MainActor.run { share = ExportItem(url: url) } }
+                        catch { await MainActor.run { self.error = error.localizedDescription } }
+                        await MainActor.run { exporting = false }
+                    }
                 }
             }
+            if exporting { ProgressView("Exporting diagnostic report…") }
             if let error { Text(error).foregroundColor(.red) }
-        }.navigationTitle("Linux App Manager")
+        }.navigationTitle("App Manager")
         .onAppear { readResults(); loadApplications() }.onReceive(timer) { _ in readResults() }
         .confirmationDialog("Confirm Package Operation", isPresented: $showConfirmation, titleVisibility: .visible) {
-            Button("Continue in Linux Terminal") { if let operation = pendingOperation { execute(operation) } }
+            Button("Continue in Linux Terminal") { if let operation = pendingOperation { execute(operation, value: pendingPackage) } }
             Button("Cancel", role: .cancel) {}
         } message: {
-            Text(pendingOperation == "install" ? "Install \(query) and its dependencies into \(environment.name)? Arch also synchronizes and upgrades the system to keep rolling dependencies consistent, with a separate pacman confirmation in the terminal." : pendingOperation == "upgrade" ? "Review an upgrade of \(query) and its dependencies. Arch requires a consistent system upgrade and shows that transaction in pacman before confirmation; Debian and Alpine upgrade the named package." : pendingOperation == "remove" ? "Review removal of \(query) in \(environment.name). The terminal will list affected packages and ask before removing them. No purge or autoremove is requested." : "Run package configuration/repair in \(environment.name). Maintainer scripts may update system configuration. A metadata checkpoint is saved first; this does not restore arbitrary filesystem changes.")
+            Text(pendingOperation == "install" ? "Install \(pendingPackage) and its dependencies into \(environment.name)? Arch also synchronizes and upgrades the system to keep rolling dependencies consistent, with a separate pacman confirmation in the terminal." : pendingOperation == "upgrade" ? "Review an upgrade of \(pendingPackage) and its dependencies. Arch requires a consistent system upgrade and shows that transaction in pacman before confirmation; Debian and Alpine upgrade the named package." : pendingOperation == "remove" ? "Review removal of \(pendingPackage) in \(environment.name). The terminal will list affected packages and ask before removing them. No purge or autoremove is requested." : "Run package configuration/repair in \(environment.name). Maintainer scripts may update system configuration. A metadata checkpoint is saved first; this does not restore arbitrary filesystem changes.")
         }
+        .alert("Stop All Desktop Sessions?", isPresented: $confirmReset) {
+            Button("Cancel", role: .cancel) { }
+            Button("Stop All", role: .destructive) { LRRuntimeBridge.resetGraphicalSessions(); refreshApplications() }
+        } message: { Text("Save documents first. This closes applications in every desktop session. Saved files and terminal sessions are kept.") }
         .sheet(item: $share) { ShareView(item: $0) }
     }
-    private func confirm(_ operation: String) { pendingOperation = operation; showConfirmation = true }
-    private func execute(_ operation: String) {
+    private func confirm(_ operation: String, package: String? = nil) { pendingOperation = operation; pendingPackage = package ?? query; showConfirmation = true }
+    private func execute(_ operation: String, value: String? = nil) {
         do {
             guard enabled, LRRuntimeBridge.activeRootName() == environment.rootfsName else { throw EnvironmentError.invalidMetadata }
             _ = try LRRuntimeBridge.prepareApplicationSupport()
-            let command = try PackageOperation.command(operation, value: query)
+            let command = try PackageOperation.command(operation, value: value ?? query)
             LRRuntimeBridge.logCategory("PACKAGE", event: "operation=\(operation) root=\(environment.rootfsName) requested")
             run(LinuxApplication(name: "Package " + operation, command: command[0], arguments: Array(command.dropFirst()), workingDirectory: "/root"))
         } catch { self.error = error.localizedDescription }
     }
-    private func loadApplications() {
-        refreshApplications()
-        guard enabled else { apps = []; return }
-        apps = LRRuntimeBridge.discoverGraphicalApplications().compactMap { item in
-            guard let name = item["name"] as? String, let path = item["executable"] as? String, let argv = item["arguments"] as? [String] else { return nil }
-            var app = LinuxApplication(name: name, command: path, arguments: argv, workingDirectory: item["directory"] as? String ?? "/root")
-            app.displayMode = item["terminal"] as? Bool == true ? .terminal : .application
-            return app
+    private func loadApplications() { refreshApplications() }
+    private func readResults() {
+        guard !loadingResults else { return }; loadingResults = true
+        let folder = support
+        Task.detached(priority: .utility) {
+            let records = LinuxPackageRecord.parse(Self.read(folder, "package-state.tsv", limit: 262144))
+            let detail = Self.read(folder, "package-details.txt", limit: 16384)
+            let output = LRRuntimeBridge.redactDiagnosticText(Self.read(folder, "package-operation.log", limit: 8192), application: false)
+            let code = Self.read(folder, "package-result", limit: 128).trimmingCharacters(in: .whitespacesAndNewlines)
+            await MainActor.run {
+                packages = records; details = detail; log = output; loadingResults = false
+                if code != previousResult { previousResult = code; if code == "0" { loadApplications() } }
+                if code == "running" { status = "Operation running or interrupted; inspect the terminal or Diagnose Package State." }
+                else if !code.isEmpty { status = code == "0" ? "Last package operation completed" : "Last operation failed (exit \(code)); inspect logs and Repair Center." }
+            }
         }
     }
-    private func read(_ name: String, limit: Int = 262144) -> String {
-        let url = support.appendingPathComponent(name)
-        guard (try? url.resourceValues(forKeys: [.isSymbolicLinkKey]).isSymbolicLink) != true,
-              let data = try? Data(contentsOf: url), data.count <= 2 * 1048576 else { return "" }
-        return String(data: data.suffix(limit), encoding: .utf8) ?? ""
+    nonisolated private static func read(_ folder: URL, _ name: String, limit: Int) -> String {
+        let url = folder.appendingPathComponent(name)
+        let fd = open(url.path, O_RDONLY | O_NOFOLLOW | O_NONBLOCK)
+        guard fd >= 0 else { return "" }; defer { close(fd) }
+        var info = stat()
+        guard fstat(fd, &info) == 0, (info.st_mode & S_IFMT) == S_IFREG, info.st_size >= 0 else { return "" }
+        let count = min(limit, Int(info.st_size))
+        var data = Data(count: count)
+        let readCount = data.withUnsafeMutableBytes { pread(fd, $0.baseAddress, count, max(0, info.st_size - off_t(count))) }
+        guard readCount >= 0 else { return "" }; data.count = readCount
+        return String(decoding: data, as: UTF8.self)
     }
-    private func readResults() {
-        packages = LinuxPackageRecord.parse(read("package-state.tsv"))
-        details = read("package-details.txt", limit: 16384)
-        log = LRRuntimeBridge.redactDiagnosticText(read("package-operation.log", limit: 8192), application: false)
-        let code = read("package-result").trimmingCharacters(in: .whitespacesAndNewlines)
-        if code != previousResult { previousResult = code; if code == "0" { loadApplications() } }
-        if code == "running" { status = "Operation running or interrupted; inspect terminal / Diagnose Package State." }
-        else if !code.isEmpty { status = code == "0" ? "Last package operation completed (exit 0)" : "Last operation failed (exit \(code)); inspect logs and Repair Center." }
-    }
+
 }
 
 struct ExportItem: Identifiable { let id = UUID(); let url: URL }
@@ -1046,22 +1083,14 @@ private struct FileSharingView: View {
     @Binding var share: ExportItem?
     var body: some View {
         List {
-            Section("Import Files") {
-                if let environment { NavigationLink("Choose Destination & Import", destination: ExchangeFilesView(environment: environment, manager: manager, share: $share)) }
-                else { Text("Install or select a Linux environment before importing files.").foregroundColor(.secondary) }
-                Text("Open a destination subfolder, then Import File Here to select a file from iOS Files.").font(.caption).foregroundColor(.secondary)
-            }
-            Section("Export Files") {
-                if let environment { NavigationLink("Select File or Folder to Export", destination: ExchangeFilesView(environment: environment, manager: manager, share: $share)) }
-                Text("Select a shared file and Save to Files, or export a folder as ZIP. The native picker selects the iOS destination.").font(.caption).foregroundColor(.secondary)
+            Section("Shared Files") {
+                if let environment {
+                    NavigationLink("Browse, Import and Export", destination: ExchangeFilesView(environment: environment, manager: manager, share: $share))
+                    Text("Linux: /mnt/LinuxRunnerShared · ~/Shared when the home alias is available").font(.caption).textSelection(.enabled)
+                    Text("Files: On My iPhone/iPad → LinuxRunner → Shared → " + environment.rootfsName).font(.caption).textSelection(.enabled)
+                } else { Text("Install a Linux environment to share files.").foregroundColor(.secondary) }
             }
             Section("Shared Folders") {
-                if let environment {
-                    NavigationLink("Open Shared Folder", destination: ExchangeFilesView(environment: environment, manager: manager, share: $share))
-                    Text("Linux: /mnt/LinuxRunnerShared · ~/Shared when the home alias is available").font(.caption).textSelection(.enabled)
-                    Text("iOS Files: On My iPhone/iPad → LinuxRunner → Shared → " + environment.rootfsName).font(.caption).textSelection(.enabled)
-                    Text(FileManager.default.fileExists(atPath: LRRuntimeBridge.sharedExchangeURL(environment.rootfsName).path) ? "App shared folder exists. The Linux mount is prepared when this environment runs." : "The app shared folder will be created on first access.").font(.caption).foregroundColor(.secondary)
-                }
                 NavigationLink("Add or Manage Shared Folders", destination: SharedFoldersView())
                 Text("External locations require your Files selection. Manage access and check availability here; removing a link keeps its files.").font(.caption).foregroundColor(.secondary)
             }
@@ -1069,7 +1098,7 @@ private struct FileSharingView: View {
     }
 }
 private struct DesktopFileSharingDestination: View {
-    @StateObject private var manager = EnvironmentManager()
+    @StateObject private var manager = EnvironmentManager.shared
     @State private var share: ExportItem?
     var body: some View { FileSharingView(environment: manager.environments.first { $0.rootfsName == LRRuntimeBridge.activeRootName() }, manager: manager, share: $share).sheet(item: $share) { ShareView(item: $0) } }
 }
@@ -1130,7 +1159,7 @@ struct ExchangeFilesView: View {
         }
     }
     private func export(_ entry: SharedFileEntry) {
-        guard !manager.busy else { return }; let control = LRTransferControl(); operation = control; manager.busy = true; failure = nil
+        guard !manager.busy else { return }; let control = LRTransferControl(); operation = control; manager.operation = .transfer; failure = nil
         Task.detached {
             do {
                 let url = try LRRuntimeBridge.exportSharedItem(entry.name, relative: relative, root: environment.rootfsName, control: control)
@@ -1141,7 +1170,7 @@ struct ExchangeFilesView: View {
     }
     private func imported(_ result: Result<URL, Error>) {
         do {
-            let source = try result.get(); let control = LRTransferControl(); operation = control; manager.busy = true; failure = nil
+            let source = try result.get(); let control = LRTransferControl(); operation = control; manager.operation = .transfer; failure = nil
             Task.detached {
                 do { try LRRuntimeBridge.importSharedFile(source, relative: relative, root: environment.rootfsName, control: control) }
                 catch { await MainActor.run { failure = error.localizedDescription } }
@@ -1202,7 +1231,7 @@ struct ExchangeFilesView: View {
         // The current directory is explicitly selected, but the native archive
         // API still opens it fd-relative to its parent and refuses symbolic links.
         guard !manager.busy else { return }; let parent = (relative as NSString).deletingLastPathComponent
-        let control = LRTransferControl(); operation = control; manager.busy = true; failure = nil
+        let control = LRTransferControl(); operation = control; manager.operation = .transfer; failure = nil
         Task.detached {
             do { let url = try LRRuntimeBridge.exportSharedItem(leaf, relative: parent == "." ? "" : parent, root: environment.rootfsName, control: control); await MainActor.run { snapshot = url; save = ExportItem(url: url) } }
             catch { await MainActor.run { failure = error.localizedDescription } }
@@ -1227,7 +1256,7 @@ private struct LegacyExchangeFilesView: View {
             Section("Files — tap to export") {
                 ForEach(leaves, id: \.self) { leaf in
                     Button(leaf) {
-                        manager.busy = true
+                        manager.operation = .transfer
                         Task.detached {
                             do {
                                 let url = try LRRuntimeBridge.exportFile(leaf, root: environment.rootfsName)
@@ -1245,7 +1274,7 @@ private struct LegacyExchangeFilesView: View {
          .fileImporter(isPresented: $importer, allowedContentTypes: [.data]) { result in
              do {
                  let source = try result.get()
-                 manager.busy = true
+                 manager.operation = .transfer
                  Task.detached {
                      do { try LRRuntimeBridge.importFile(source, root: environment.rootfsName) }
                      catch { await MainActor.run { manager.error = error.localizedDescription } }
@@ -1262,39 +1291,6 @@ private struct LegacyExchangeFilesView: View {
     }
 }
 
-struct DiagnosticsView: View {
-    @ObservedObject var manager: EnvironmentManager
-    @Binding var share: ExportItem?
-    @Environment(\.dismiss) private var dismiss
-    var body: some View {
-        NavigationView {
-            List {
-                Section("Runtime") {
-                    Text("App: \(Bundle.main.infoDictionary?["CFBundleShortVersionString"] as? String ?? "?") (\(Bundle.main.infoDictionary?["CFBundleVersion"] as? String ?? "?"))")
-                    Text("Source: \(Bundle.main.infoDictionary?["LinuxRunnerSourceCommit"] as? String ?? "unknown") · iSH-derived runtime")
-                    Text("Guest: ARM64 · " + ((LRRuntimeBridge.jitStatusReport() as? [String: Any])?["state"] as? String ?? "Interpreter Active"))
-                    Text("Host: \(UIDevice.current.systemName) \(UIDevice.current.systemVersion) · ARM64")
-                    Text(LRRuntimeBridge.runtimeStatus())
-                    ForEach(manager.environments.filter(manager.active)) { env in
-                        Text("\(env.distribution) \(env.rootfsVersion) · \(manager.size(env))")
-                    }
-                }
-                Section("Diagnostics") {
-                    Text("Categories: EXEC, SYSCALL, FS, MEMORY, SIGNAL, NETWORK, LOADER, UI. This export includes app events and instruction-fault metadata. Detailed syscall tracing is a developer build option.").font(.caption)
-                    Button("Export Diagnostics") {
-                        do {
-                            let url = try LRRuntimeBridge.exportLogs()
-                            dismiss()
-                            DispatchQueue.main.asyncAfter(deadline: .now() + 0.4) { share = ExportItem(url: url) }
-                        } catch { manager.error = error.localizedDescription }
-                    }
-                    ForEach(Array(manager.logs.enumerated()), id: \.offset) { _, line in Text(line).font(.system(.caption, design: .monospaced)).textSelection(.enabled) }
-                }
-            }.navigationTitle("Diagnostics").toolbar { Button("Done") { dismiss() } }
-        }.navigationViewStyle(.stack)
-    }
-}
-
 struct DeveloperDiagnosticsView: View {
     @Environment(\.dismiss) private var dismiss
     @State private var entries: [[String: Any]] = []
@@ -1308,6 +1304,7 @@ struct DeveloperDiagnosticsView: View {
     @State private var retention = UserDefaults.standard.object(forKey: "DiagnosticRetention") == nil ? 4 : UserDefaults.standard.integer(forKey: "DiagnosticRetention")
     @State private var share: ExportItem?
     @State private var failure: String?
+    @State private var loading = false
     private let tick = Timer.publish(every: 2, on: .main, in: .common).autoconnect()
     private var filtered: [[String: Any]] { entries.filter { entry in
         (category == "All" || entry["category"] as? String == category) &&
@@ -1322,10 +1319,10 @@ struct DeveloperDiagnosticsView: View {
                 Section("Logging") {
                     Picker("Level", selection: $level) { ForEach(DiagnosticLevel.allCases, id: \.rawValue) { Text($0.label).tag($0.rawValue) } }
                     Text("TRACE records successful calls and has substantial overhead. Logs rotate at 1 MiB.").font(.caption)
-                    Stepper("Previous log files: \(retention)", value: $retention, in: 1...16).onChange(of: retention) { value in DiagnosticCenter.setRetention(value) }
+                    Stepper("Previous log files: \(retention)", value: $retention, in: 1...16)
                     TextField("Guest PID/TID (optional)", text: $pid).keyboardType(.numberPad)
                     TextField("Syscall number (optional)", text: $syscall).keyboardType(.numberPad)
-                    Button("Apply tracing filters") { LRRuntimeBridge.configureDiagnostics(Int32(level), process: Int32(pid) ?? -1, syscall: Int32(syscall) ?? -1, errorsOnly: level < 4) }
+                    Button("Apply Logging Settings") { DiagnosticCenter.setRetention(retention); LRRuntimeBridge.configureDiagnostics(Int32(level), process: Int32(pid) ?? -1, syscall: Int32(syscall) ?? -1, errorsOnly: level < 4) }
                 }
                 Section("Live logs") {
                     Picker("Category", selection: $category) { Text("All").tag("All"); ForEach(Array(Set(entries.compactMap { $0["category"] as? String })).sorted(), id: \.self) { Text($0).tag($0) } }
@@ -1352,7 +1349,15 @@ struct DeveloperDiagnosticsView: View {
             }.navigationTitle("Developer Diagnostics").toolbar { Button("Done") { dismiss() } }
         }.navigationViewStyle(.stack).onAppear(perform: refresh).onReceive(tick) { _ in refresh() }.sheet(item: $share) { ShareView(item: $0) }
     }
-    private func refresh() { entries = LRRuntimeBridge.diagnosticEntries().compactMap { $0 as? [String: Any] }; health = LRRuntimeBridge.healthSummary() as? [String: Any] ?? [:] }
+    private func refresh() {
+        guard !loading else { return }; loading = true
+        Task.detached(priority: .utility) {
+            let records = LRRuntimeBridge.diagnosticEntries().compactMap { $0 as? [String: Any] }
+            let snapshot = LRRuntimeBridge.healthSummary() as? [String: Any] ?? [:]
+            await MainActor.run { entries = records; health = snapshot; loading = false }
+        }
+    }
+
 }
 
 struct StorageManagementView: View {
@@ -1387,7 +1392,8 @@ struct StorageManagementView: View {
             values["Total persistent container"] = StorageUsage.bytes(base)
             values["Bundled application"] = StorageUsage.bytes(Bundle.main.bundleURL)
             let available = try? base.resourceValues(forKeys: [.volumeAvailableCapacityForImportantUsageKey]).volumeAvailableCapacityForImportantUsage
-            await MainActor.run { usage = values; free = available }
+            let snapshot = values
+            await MainActor.run { usage = snapshot; free = available }
         }
     }
 }
@@ -1502,6 +1508,7 @@ private struct ApplicationGridView: View {
     let run: (LinuxApplication) -> Void
     @State private var selectedRoot = LRRuntimeBridge.activeRootName()
     @State private var search = ""
+    @State private var nextRoot = LRRuntimeBridge.nextRootName()
     @State private var category = "All"
     @State private var favorites = Set<String>()
     @State private var recent = [String]()
@@ -1550,7 +1557,8 @@ private struct ApplicationGridView: View {
                 }.font(.caption).foregroundColor(.secondary)
                 if let environment, !manager.active(environment) {
                     Text("Select this environment for the next launch, then reopen LinuxRunner. Its installed packages and files are preserved.").font(.callout)
-                    Button("Use on Next Launch") { LRRuntimeBridge.setNextRootName(environment.rootfsName) }
+                    Button("Use on Next Launch") { LRRuntimeBridge.setNextRootName(environment.rootfsName); nextRoot = environment.rootfsName }
+                    if nextRoot == environment.rootfsName { Text("Selected for next launch. Close LinuxRunner completely and open it again.").font(.caption).foregroundColor(.secondary) }
                 } else {
                     Picker("Category", selection: $category) { ForEach(categories, id: \.self) { Text($0).tag($0) } }.pickerStyle(.menu)
                     if filtered.isEmpty && !manager.discovering {
@@ -1580,8 +1588,8 @@ private struct ApplicationGridView: View {
                     }
                     Text("Discovery identifies installed launchers; it does not certify application compatibility. Applications launch into the shared desktop. Returning to LinuxRunner retains its windows; Stop Desktop ends the owned session.").font(.footnote).foregroundColor(.secondary)
                     if let environment {
-                        NavigationLink("App Manager", destination: PackageView(environment: environment, enabled: manager.active(environment), run: run, refreshApplications: manager.refresh))
-                        NavigationLink("Advanced Command Launcher", destination: LauncherEditor { manager.add(application: $0, to: environment) })
+                        NavigationLink("App Manager", destination: PackageView(manager: manager, environment: environment, enabled: manager.active(environment), run: run, refreshApplications: manager.refresh))
+                        NavigationLink("Create Launcher", destination: LauncherEditor { manager.add(application: $0, to: environment) })
                     }
                 }
             }.padding()
@@ -1608,25 +1616,33 @@ private struct DesktopControlSettings: View {
     @AppStorage("LinuxRunnerInput.mouseGain") private var mouseGain = 1.0
     @AppStorage("LinuxRunnerInput.scrollGain") private var scrollGain = 1.0
     private let tick = Timer.publish(every: 2, on: .main, in: .common).autoconnect()
-    let openDesktop: (() -> Void)?
-    init(controller: LRGUIViewController, openDesktop: (() -> Void)? = nil) { _handle = StateObject(wrappedValue: DesktopControlHandle(controller)); self.openDesktop = openDesktop }
+    let managerAction: ((String) -> Void)?
+    @ObservedObject private var installMonitor = InstallMonitor.shared
+    @State private var installFailure: String?
+    init(controller: LRGUIViewController, managerAction: ((String) -> Void)? = nil) {
+        _handle = StateObject(wrappedValue: DesktopControlHandle(controller)); self.managerAction = managerAction
+    }
     private func action(_ name: String) {
-        let controller = handle.controller
-        dismiss()
-        // Presenting another native sheet waits until this one is dismissed.
-        DispatchQueue.main.asyncAfter(deadline: .now() + 0.4) { if name == "start", let openDesktop { openDesktop() } else { controller?.performDesktopAction(name) } }
+        if let managerAction { managerAction(name); dismiss() }
+        else { handle.controller?.performDesktopAction(afterDismissing: name) }
+    }
+    private func repair() {
+        installFailure = nil
+        LRRuntimeBridge.prepareDesktopProfile({ _ in }) { error in installFailure = error?.localizedDescription }
     }
     private func refresh() { state = handle.controller?.desktopControlState() as? [String: Any] ?? [:]; health = LRRuntimeBridge.healthSummary() as? [String: Any] ?? [:] }
     private func value(_ key: String) -> String { state[key] as? String ?? "Not available" }
     private var alive: Bool { state["alive"] as? Bool == true }
+    private var stopping: Bool { state["stopping"] as? Bool == true }
     var body: some View {
         NavigationView {
             Form {
                 Section("Status") {
                     LabeledContentRow("Session", value: value("state"))
                     LabeledContentRow("Host thermal state", value: health["host_thermal_state"] as? String ?? "Not reported")
-                    LabeledContentRow("Distribution", value: LRRuntimeBridge.activeEnvironmentIsArch() ? "Arch Linux ARM" : LRRuntimeBridge.activeEnvironmentIsDebian() ? "Debian ARM64" : "Alpine ARM64")
-                    LabeledContentRow("Desktop", value: value("desktopEnvironment"))
+                    LabeledContentRow("Environment", value: EnvironmentNames.name(LRRuntimeBridge.activeRootName()))
+                    LabeledContentRow("Desktop", value: DesktopChoice(rawValue: value("desktopEnvironment"))?.title ?? value("desktopEnvironment"))
+                    if let notice = state["fallbackNotice"] as? String, !notice.isEmpty { Text(notice).font(.callout).foregroundColor(.orange) }
                     LabeledContentRow("Linux user", value: value("user"))
                     LabeledContentRow("Display server", value: value("displayServer"))
                     LabeledContentRow("Display transport", value: value("transport"))
@@ -1638,16 +1654,16 @@ private struct DesktopControlSettings: View {
                 Section("Display") {
                     LabeledContentRow("Received framebuffer", value: value("framebuffer"))
                     NavigationLink("Display & Gestures", destination: DesktopPreferencesView())
-                    HStack { Button("Fit", action: { action("fit") }); Spacer(); Button("Actual Size", action: { action("actual") }); Spacer(); Button("Full Screen", action: { action("fullscreen") }) }
+                    if managerAction == nil { HStack { Button("Fit", action: { action("fit") }); Spacer(); Button("Actual Size", action: { action("actual") }); Spacer(); Button("Full Screen", action: { action("fullscreen") }) }.buttonStyle(.borderless) }
                     Toggle("External Desktop Output", isOn: $externalOutput)
                     LabeledContentRow("External scene", value: state["externalConnected"] as? Bool == true ? "Connected" : "Not connected")
                     if let maximum = state["screenMaximumRefresh"] as? Int, maximum > 0 { Text("iOS screen capability: up to \(maximum) Hz. This is not measured Linux frame rate.").font(.caption).foregroundColor(.secondary) }
                     if let modes = state["screenModes"] as? [String], !modes.isEmpty { DisclosureGroup("iOS Screen Modes · Read Only") { ForEach(modes, id: \.self) { Text($0).font(.caption) }; Text("Host screen capabilities; these are not additional guest resolution or refresh-rate controls.").font(.caption).foregroundColor(.secondary) } }
-                    Button("Wireless Display (AirPlay)…") { action("wireless") }
+                    if managerAction == nil { Button("Wireless Display (AirPlay)…") { action("wireless") } }
                     Text("Fit preserves aspect ratio. Resolution applies at the next desktop start. Changing viewer scaling keeps the current desktop running.").font(.caption).foregroundColor(.secondary)
                 }
                 Section("Input") {
-                    Button(state["touchpad"] as? Bool == true ? "Show Desktop on This Device" : state["trackpadRequested"] as? Bool == true ? "Cancel Trackpad Connection" : "Use iPhone as Trackpad") { action("touchpad") }
+                    if managerAction == nil { Button(state["touchpad"] as? Bool == true ? "Show Desktop on This Device" : state["trackpadRequested"] as? Bool == true ? "Cancel Trackpad Connection" : "Use This Device as Touchpad") { action("touchpad") } }
                     if state["trackpadReady"] as? Bool != true { Text("Enables external output and opens trackpad controls when a separate display and desktop frame are available.").font(.caption).foregroundColor(.secondary) }
                     Text("Touchpad sensitivity: \(touchpadGain, specifier: "%.2g")×").font(.caption)
                     Slider(value: $touchpadGain, in: 0.25...4, step: 0.25).accessibilityLabel("Touchpad sensitivity")
@@ -1655,27 +1671,29 @@ private struct DesktopControlSettings: View {
                     Slider(value: $mouseGain, in: 0.25...4, step: 0.25).accessibilityLabel("Mouse sensitivity")
                     Text("Scrolling sensitivity: \(scrollGain, specifier: "%.2g")×").font(.caption)
                     Slider(value: $scrollGain, in: 0.25...4, step: 0.25).accessibilityLabel("Scrolling sensitivity")
-                    NavigationLink("Keyboard & Terminal", destination: TerminalSettingsView())
-                    Button("Paste Clipboard Text") { action("clipboard") }
+                    NavigationLink("Terminal & Keyboard", destination: TerminalSettingsView())
+                    if managerAction == nil { Button("Paste Clipboard Text") { action("clipboard") }.disabled(!alive) }
                     Text("Slide to move, tap to click, hold and slide to drag; two fingers scroll or tap for right click in touchpad mode. Clipboard text is sent only when requested.").font(.caption).foregroundColor(.secondary)
                 }
                 Section("Desktop Session") {
-                    Button(alive ? "Reconnect Viewer" : "Start Desktop") { action("start") }.disabled(!LRRuntimeBridge.isRunning())
-                    Button("Restart Desktop") { pending = "restart" }.disabled(!alive)
+                    Button(alive ? "Reconnect Viewer" : "Start Desktop") { action("start") }.disabled(!LRRuntimeBridge.isRunning() || stopping)
+                    Button("Restart Desktop") { pending = "restart" }.disabled(!alive || stopping)
                     Button("Stop Desktop", role: .destructive) { pending = "stop" }.disabled(!alive)
                     NavigationLink("Desktop Environment", destination: DesktopEnvironmentView())
-                    Button("Install / Repair Desktop Components") { action("install") }.disabled(LRRuntimeBridge.installationRunning())
+                    Button("Install / Repair Desktop Components", action: repair).disabled(alive || installMonitor.running || !LRRuntimeBridge.isRunning())
+                    if alive { Text("Save documents and stop the desktop before repairing its components.").font(.caption).foregroundColor(.secondary) }
+                    if let installFailure { Text(installFailure).foregroundColor(.orange) }
                     NavigationLink("Desktop Logs", destination: DesktopLogsContent())
                 }
                 Section { NavigationLink("File Sharing", destination: DesktopFileSharingDestination()) }
                 Section("Advanced") {
                     LabeledContentRow("Presentation", value: value("presenter"))
-                    NavigationLink("Guest Graphics Backend", destination: GraphicsSettingsView())
+                    NavigationLink("Graphics", destination: GraphicsSettingsView())
                     Text(value("statusDetail")).font(.caption).textSelection(.enabled)
                     Text("Changing the viewer keeps the current Linux session running.").font(.caption).foregroundColor(.secondary)
                 }
             }.navigationTitle("Desktop Settings").toolbar { Button("Done") { dismiss() } }
-        }.navigationViewStyle(.stack).onAppear(perform: refresh).onReceive(tick) { _ in refresh() }
+        }.navigationViewStyle(.stack).safeAreaInset(edge: .bottom, spacing: 0) { InstallProgressCard() }.onAppear(perform: refresh).onReceive(tick) { _ in refresh() }
             .alert("\(pending == "restart" ? "Restart" : "Stop") Desktop?", isPresented: Binding(get: { pending != nil }, set: { if !$0 { pending = nil } })) {
                 Button("Cancel", role: .cancel) { pending = nil }
                 Button("Continue", role: .destructive) { let operation = pending; pending = nil; if let operation { action(operation) } }
@@ -1855,7 +1873,7 @@ private struct NetworkDiagnosticsView: View {
     }
 }
 
-// Linux programs' sound plays on the iPhone while a desktop or app session
+// Linux programs' sound plays on this device while a desktop or app session
 // runs (PulseAudio in the session → loopback stream → AVAudioEngine).
 // What external devices reach Linux, detected live through public iOS APIs.
 // iOS gives apps no raw USB access, so each category says which path it uses.
@@ -2018,7 +2036,7 @@ private struct AudioSettingsView: View {
         List {
             Section {
                 Toggle("Linux Sound", isOn: $enabled)
-            } footer: { Text("Plays sound from Linux programs (browsers, media players, games) through the iPhone, mixed with other apps. Applies to the next desktop or app session. Sound stops while LinuxRunner is in the background.") }
+            } footer: { Text("Plays sound from Linux programs (browsers, media players, games) through this device, mixed with other apps. Applies to the next desktop or app session. Sound stops while LinuxRunner is in the background.") }
             Section("Current Session") {
                 valueRow("Status", value: audio["state"] as? String ?? "No running session")
                 if let played = audio["played_ms"] as? Int, played > 0 {
@@ -2028,7 +2046,7 @@ private struct AudioSettingsView: View {
                 }
                 if let error = audio["last_error"] as? String, !error.isEmpty { Text(error).font(.footnote).foregroundStyle(.orange) }
             }
-            Section("Microphone") { Text("Not available yet: Linux programs cannot record from the iPhone microphone in this version.").font(.footnote).foregroundStyle(.secondary) }
+            Section("Microphone") { Text("Not available yet: Linux programs cannot record from this device microphone in this version.").font(.footnote).foregroundStyle(.secondary) }
         }
         .navigationTitle("Audio")
         .onAppear(perform: refresh).onReceive(timer) { _ in refresh() }
@@ -2085,7 +2103,7 @@ private struct SharedFoldersView: View {
     }
 }
 
-private enum DesktopChoice: String, CaseIterable, Identifiable {
+enum DesktopChoice: String, CaseIterable, Identifiable {
     case linuxrunner, lxqt, enlightenment, wayfire, hyprland, plasma
     var id: String { rawValue }
     var title: String {
@@ -2143,6 +2161,7 @@ private enum DesktopChoice: String, CaseIterable, Identifiable {
 private struct DesktopEnvironmentView: View {
     @AppStorage private var environment: String
     @State private var installed: Set<DesktopChoice> = []
+    @ObservedObject private var monitor = InstallMonitor.shared
     @State private var installing: DesktopChoice?
     @State private var stage = ""
     @State private var failure: String?
@@ -2152,7 +2171,7 @@ private struct DesktopEnvironmentView: View {
         _environment = AppStorage(wrappedValue: previous ?? "linuxrunner", key)
     }
     private var selected: DesktopChoice { DesktopChoice(rawValue: environment) ?? .linuxrunner }
-    private var installBusy: Bool { installing != nil || LRRuntimeBridge.installationRunning() }
+    private var installBusy: Bool { installing != nil || monitor.running || LRRuntimeBridge.installationRunning() }
     private func refresh() { installed = Set(DesktopChoice.allCases.filter { $0.installed }) }
     private func install(_ desktop: DesktopChoice) {
         guard !installBusy else { return }
@@ -2202,6 +2221,7 @@ private struct DesktopEnvironmentView: View {
                 NavigationLink("Graphics", destination: GraphicsSettingsView())
             }
         }.navigationTitle("Desktop Environment").onAppear(perform: refresh)
+            .onReceive(monitor.$state) { state in if state?.phase == "succeeded" { refresh() } }
     }
 }
 private struct GraphicsSettingsView: View {
@@ -2210,6 +2230,7 @@ private struct GraphicsSettingsView: View {
     @State private var gpu = LRRuntimeBridge.gpuStatus() as? [String: Any] ?? [:]
     @AppStorage("LinuxRunner.developerMode") private var developerMode = false
     @State private var summary: [String: Any] = [:]
+    @State private var loading = false
     private let refresh = Timer.publish(every: 2, on: .main, in: .common).autoconnect()
     private var processes: [[String: String]] { (summary["processes"] as? [[String: String]]) ?? [] }
     var body: some View { Form {
@@ -2236,7 +2257,7 @@ private struct GraphicsSettingsView: View {
                     Text("Takes effect after LinuxRunner restarts.").font(.caption).foregroundColor(.orange)
                 }
             } header: { Text("Linux GPU Device") } footer: {
-                Text("Metal GPU gives Linux a virtual GPU: Mesa's own virgl driver renders on the iPhone GPU through Metal (ANGLE). Today Hyprland composites on it; other desktops keep software rendering. If the GPU does not start, LinuxRunner falls back to software and shows why. Automatic uses software rendering until Metal is validated on iPhone.")
+                Text("Metal GPU gives Linux a virtual GPU: Mesa's own virgl driver renders on this device through the GPU through Metal (ANGLE). Hyprland and Wayfire can use it for compositor rendering. Application rendering depends on the selected backend. If the GPU does not start, LinuxRunner falls back to software and shows why. Automatic uses software rendering until Metal is validated on this device.")
             }
         }
         Section("Current Session") {
@@ -2251,10 +2272,18 @@ private struct GraphicsSettingsView: View {
                 Text("Metal draws are guest OpenGL draws executed by the GPU. Mesa draws were rasterised in software. Presenting the desktop through Metal is not counted as acceleration.")
             }
         }
-    }.navigationTitle("Graphics").onAppear { summary = LRRuntimeBridge.graphicsSummary() }.onReceive(refresh) { _ in summary = LRRuntimeBridge.graphicsSummary() } }
+    }.navigationTitle("Graphics").onAppear(perform: refreshSummary).onReceive(refresh) { _ in refreshSummary() } }
+    private func refreshSummary() {
+        guard !loading else { return }; loading = true
+        Task.detached(priority: .utility) {
+            let snapshot = LRRuntimeBridge.graphicsSummary()
+            await MainActor.run { summary = snapshot; loading = false }
+        }
+    }
+
     private var description: String {
         switch mode {
-        case "mesa-metal-resident": return "Supported OpenGL draws run on the iPhone GPU through Metal, with images kept on the GPU between draws. Unsupported operations fall back to software Mesa. Tested on Mac with Blender; device results are still being collected."
+        case "mesa-metal-resident": return "Supported OpenGL draws run on this device through the GPU through Metal, with images kept on the GPU between draws. Unsupported operations fall back to software Mesa. Tested on Mac with Blender; device results are still being collected."
         case "mesa-metal-verify": return "Development diagnostics: every Metal draw is compared with Mesa. Much slower; use only to investigate rendering differences."
         default: return "All Linux graphics are rendered by Mesa on the CPU. Most compatible; slowest for 3D applications."
         }
@@ -2288,7 +2317,7 @@ private struct ProcessGraphicsRow: View {
 private struct LinuxRunnerAboutView: View {
     @State private var notices = false
     var body: some View { List {
-        Section { Text("LinuxRunner").font(.system(size: 30, weight: .bold, design: .rounded)); Text("Local Linux ARM64 userspace for iPhone.").foregroundColor(.secondary) }
+        Section { Text("LinuxRunner").font(.system(.largeTitle, design: .rounded).weight(.bold)); Text("Local Linux ARM64 userspace for this device.").foregroundColor(.secondary) }
         Section("Developer Build") {
             Text("Version \(Bundle.main.object(forInfoDictionaryKey: "CFBundleShortVersionString") as? String ?? "unknown") (\(Bundle.main.object(forInfoDictionaryKey: "CFBundleVersion") as? String ?? "unknown"))")
             Text("Source: " + (Bundle.main.object(forInfoDictionaryKey: "LinuxRunnerSourceCommit") as? String ?? "unknown")).font(.caption).textSelection(.enabled)
@@ -2446,7 +2475,7 @@ enum SimulatorWorkflow {
                         catch { LRRuntimeBridge.desktopTrace("simulator", result: "fail", detail: "share failed: \(error.localizedDescription)") }
                     }
                 case "user":
-                    // A normal default Linux user, as on the iPhone (account tools install if missing).
+                    // A normal default Linux user, as on this device (account tools install if missing).
                     let name = ProcessInfo.processInfo.environment["LR_SIM_USER"] ?? "lrsim"
                     LRRuntimeBridge.createLinuxUser(name, password: "lrsim-password", administrator: false, progress: { _ in }) { error in
                         if let error { LRRuntimeBridge.desktopTrace("simulator", result: "fail", detail: "user failed: \(error.localizedDescription)"); return }
@@ -2490,6 +2519,14 @@ final class InstallMonitor: ObservableObject {
     }
     static let shared = InstallMonitor()
     @Published var state: State?
+    var running: Bool { state?.phase == "running" }
+    @Published var cancellationRequested = false
+    @Published var cancelFailure: String?
+    func cancel() {
+        guard running, !cancellationRequested else { return }
+        do { _ = try LRRuntimeBridge.cancelSupportInstallation(); cancellationRequested = true }
+        catch { cancelFailure = error.localizedDescription }
+    }
     private var hide: DispatchWorkItem?
     private init() {
         NotificationCenter.default.addObserver(forName: Notification.Name("LRInstallProgressNotification"), object: nil, queue: .main) { [weak self] note in
@@ -2498,6 +2535,9 @@ final class InstallMonitor: ObservableObject {
                               detail: info["detail"] as? String ?? "", fraction: (info["fraction"] as? NSNumber)?.doubleValue ?? -1,
                               elapsed: (info["elapsed"] as? NSNumber)?.doubleValue ?? 0, phase: info["phase"] as? String ?? "running",
                               error: info["error"] as? String, log: info["log"] as? String)
+            if state.phase == "running" && self.state?.phase != "running" {
+                self.cancellationRequested = false; self.cancelFailure = nil
+            }
             self.hide?.cancel()
             self.state = state
             if state.phase == "succeeded" {
@@ -2507,7 +2547,7 @@ final class InstallMonitor: ObservableObject {
             }
         }
     }
-    func dismiss() { state = nil }
+    func dismiss() { if !running { state = nil } }
 }
 
 struct InstallProgressCard: View {
@@ -2537,7 +2577,9 @@ struct InstallProgressCard: View {
                             ProgressView().frame(maxWidth: .infinity, alignment: .leading)
                         }
                         if !state.detail.isEmpty { Text(state.detail).font(.caption).foregroundColor(.secondary).lineLimit(2) }
-                        Text("Please keep LinuxRunner open.").font(.caption).foregroundColor(.secondary)
+                        Text(monitor.cancellationRequested ? "Cancellation requested. The current package or build stage must finish first." : "Keep LinuxRunner open until the current stage finishes.").font(.caption).foregroundColor(.secondary)
+                        Button(monitor.cancellationRequested ? "Cancellation Requested" : "Cancel After Current Stage") { monitor.cancel() }.disabled(monitor.cancellationRequested).font(.footnote)
+                        if let failure = monitor.cancelFailure { Text(failure).font(.caption).foregroundColor(.orange) }
                     }
                     if let error = state.error {
                         Text(error).font(.footnote).foregroundColor(.orange).fixedSize(horizontal: false, vertical: true)
@@ -2551,7 +2593,7 @@ struct InstallProgressCard: View {
             }
             .padding(14)
             .background(.regularMaterial, in: RoundedRectangle(cornerRadius: 14, style: .continuous))
-            .padding(.horizontal, 12).padding(.bottom, 56)
+            .padding(.horizontal, 12).padding(.bottom, 8)
             .accessibilityElement(children: .contain)
             .transition(.move(edge: .bottom).combined(with: .opacity))
         }
@@ -2705,7 +2747,7 @@ struct TaskManagerView: View {
             }
             card("LinuxRunner") {
                 metric(sampler.footprint > 0 ? Self.bytes(Double(sampler.footprint) / 1024) : "Unavailable", "App memory (iOS footprint, includes the runtime)", TaskStyle.yellow)
-                row("Distribution", LRRuntimeBridge.activeRootName() ?? "None")
+                row("Environment", EnvironmentNames.name(LRRuntimeBridge.activeRootName() ?? "None"))
                 row("Execution", (LRRuntimeBridge.jitStatusReport() as? [String: Any])?["state"] as? String ?? (jit ? "JIT" : "Interpreter"))
                 row("Graphics", (LRRuntimeBridge.gpuStatus() as? [String: Any])?["active"] as? String ?? "Software")
                 row("GPU activity", "Unavailable")
@@ -2766,7 +2808,9 @@ private struct DetailRow: View {   // LabeledContent needs iOS 16
 }
 
 private struct ProcessDetailView: View {
-    let process: GuestProcess
+    let initialProcess: GuestProcess
+    var process: GuestProcess { sampler.processes.first { $0.id == initialProcess.id } ?? initialProcess }
+    init(process: GuestProcess, sampler: TaskSampler) { self.initialProcess = process; self.sampler = sampler }
     @ObservedObject var sampler: TaskSampler
     @Environment(\.dismiss) private var dismiss
     @State private var confirm: Bool?   // false: terminate, true: force
@@ -2780,6 +2824,7 @@ private struct ProcessDetailView: View {
                     DetailRow("State", value: process.stateName); DetailRow("Threads", value: "\(process.threads)")
                 }
                 Section("Resources") {
+                    if !sampler.processes.contains(where: { $0.id == initialProcess.id }) { Text("The process exited. The last recorded sample is shown.").font(.caption).foregroundColor(.secondary) }
                     DetailRow("CPU now", value: String(format: "%.1f%% of a core", process.cpuPercent))
                     DetailRow("CPU time", value: String(format: "%.1f s", Double(process.cpuMs) / 1000))
                     DetailRow("Private memory", value: "\(process.privateKB / 1024) MB")
@@ -2787,8 +2832,8 @@ private struct ProcessDetailView: View {
                     DetailRow("Mapped address space", value: "\(process.mappedKB / 1024) MB")
                 }
                 Section {
-                    Button("End Process (SIGTERM)") { confirm = false }.disabled(process.id <= 1)
-                    Button("Force Kill (SIGKILL)", role: .destructive) { confirm = true }.disabled(process.id <= 1)
+                    Button("End Process (SIGTERM)") { confirm = false }.disabled(process.id <= 1 || !sampler.processes.contains { $0.id == initialProcess.id })
+                    Button("Force Kill (SIGKILL)", role: .destructive) { confirm = true }.disabled(process.id <= 1 || !sampler.processes.contains { $0.id == initialProcess.id })
                     if let result { Text(result).font(.caption).foregroundColor(.secondary) }
                 } footer: { Text(process.id <= 1 ? "PID 1 runs the Linux session and cannot be ended here." : "Ending a desktop component (window manager, panel, compositor) can close the desktop session.") }
             }

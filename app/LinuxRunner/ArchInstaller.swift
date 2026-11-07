@@ -202,12 +202,14 @@ private final class ArchCancellation: @unchecked Sendable {
     @Published var running = false { didSet { if running != oldValue { running ? LRRuntimeBridge.beginAwake("arch-install") : LRRuntimeBridge.endAwake("arch-install") } } }
     @Published var failure: String?
     private var operation: Task<Void, Never>?
+    static let requiredBytes = Int64(1536) * 1024 * 1024
     private var cancellation = ArchCancellation()
     func cancel() { cancellation.cancel(); operation?.cancel() }
 
     private static func fetch(_ path: String, to destination: URL) async throws {
         var lastError = "no mirror reachable"
         for mirror in mirrors {
+            try Task.checkCancellation()
             guard let url = URL(string: mirror + "/" + path) else { continue }
             do {
                 let (download, response) = try await URLSession.shared.download(from: url)
@@ -217,7 +219,10 @@ private final class ArchCancellation: @unchecked Sendable {
                 try? FileManager.default.removeItem(at: destination)
                 try FileManager.default.moveItem(at: download, to: destination)
                 return
-            } catch { lastError = error.localizedDescription }
+            } catch {
+                if Task.isCancelled { throw CancellationError() }
+                lastError = error.localizedDescription
+            }
         }
         throw ArchInstallError.failure("Download failed for \(path): \(lastError)")
     }
@@ -232,7 +237,7 @@ private final class ArchCancellation: @unchecked Sendable {
                 let key = try AlarmSignature.key()
                 let base = LRRuntimeBridge.managedStorageURL()
                 let available = try base.resourceValues(forKeys: [.volumeAvailableCapacityForImportantUsageKey]).volumeAvailableCapacityForImportantUsage ?? 0
-                guard available >= Int64(1536) * 1024 * 1024 else { throw ArchInstallError.failure("At least 1.5 GB of available storage is required.") }
+                guard available >= Self.requiredBytes else { throw ArchInstallError.failure("At least 1.5 GB of available storage is required.") }
                 let cache = base.appendingPathComponent("downloads/archlinuxarm-aarch64", isDirectory: true)
                 let temporary = base.appendingPathComponent("installer-temporary", isDirectory: true)
                 try FileManager.default.createDirectory(at: cache, withIntermediateDirectories: true)
@@ -243,7 +248,7 @@ private final class ArchCancellation: @unchecked Sendable {
                     try Task.checkCancellation()
                     let db = cache.appendingPathComponent("\(repo).db")
                     try await Self.fetch("\(repo)/\(repo).db", to: db)
-                    let text = try LRRuntimeBridge.readArchDatabase(db)
+                    let text = try await Task.detached(priority: .utility) { try LRRuntimeBridge.readArchDatabase(db) }.value
                     for (name, p) in ArchPackage.parseDatabase(text, repository: repo) where packages[name] == nil { packages[name] = p }
                 }
                 let order = try ArchResolver.resolve(packages, wanted: ArchResolver.basePackages)
@@ -260,10 +265,10 @@ private final class ArchCancellation: @unchecked Sendable {
                     message = "Downloading/verifying \(package.name) (\(index + 1)/\(order.count))"
                     fraction = total > 0 ? Double(done) / Double(total) * 0.6 : 0
                     let destination = cache.appendingPathComponent(package.filename)
-                    if (try? DebianInstaller.sha256(destination)) != package.sha256 {
+                    if (try? await Task.detached(priority: .utility) { try DebianInstaller.sha256(destination, cancel: { token.check() }) }.value) != package.sha256 {
                         try await Self.fetch("\(package.repository)/\(package.filename)", to: destination)
                     }
-                    let sha = try DebianInstaller.sha256(destination)
+                    let sha = try await Task.detached(priority: .utility) { try DebianInstaller.sha256(destination, cancel: { token.check() }) }.value
                     guard sha == package.sha256 else { throw ArchInstallError.failure("Integrity verification failed for \(package.name): SHA-256 mismatch.") }
                     try await Task.detached(priority: .utility) { try AlarmSignature.verify(file: destination, signature: sig, key: key) }.value
                     DiagnosticCenter.installer(2, message: "stage=arch_verify package=\(package.name) version=\(package.version) sha256=\(sha) signature=PASS")
@@ -280,7 +285,7 @@ private final class ArchCancellation: @unchecked Sendable {
                                                              progress: { value in Task { @MainActor in self.fraction = 0.6 + value * 0.2 } }, cancel: { token.check() })
                 }.value
                 message = "Importing isolated Arch Linux ARM filesystem"
-                let sha = try DebianInstaller.sha256(archive)
+                let sha = try await Task.detached(priority: .utility) { try DebianInstaller.sha256(archive, cancel: { token.check() }) }.value
                 let metadata = ["distributionID": "arch", "distribution": "Arch Linux ARM", "version": "rolling", "packageManager": "pacman", "defaultShell": "/bin/bash"]
                 try await Task.detached(priority: .utility) {
                     try LRRuntimeBridge.importVerifiedEnvironment(archive, root: root, sha256: sha, metadata: metadata,

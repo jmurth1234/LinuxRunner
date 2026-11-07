@@ -84,7 +84,7 @@
     },
     {
       "name": "desktop-profile.sh",
-      "sha256": "53d8f56369f46ac9b6802abb3f590af0738f994ba40f79d23041170f75bc11de",
+      "sha256": "bc29f96116130d6085c7cd592026420afac321eecd10e2ef603c97b4ae965924",
       "mode": "0755"
     },
     {
@@ -314,7 +314,7 @@
     },
     {
       "name": "installer-run.sh",
-      "sha256": "02f0d885bd489f862d9b27842495bfc6bf487514926dc8a3ad4ab25fe77280b7",
+      "sha256": "49588f15e5a0c768f1318c48d50f53a99ffddf7a8e6a10f5a4f16cabb3801f4e",
       "mode": "0755"
     },
     {
@@ -414,7 +414,7 @@
     },
     {
       "name": "session.sh",
-      "sha256": "0a0385bc0da05cc3c4aee0afe00e9fea89f51cfa700200e3c2d9c6c8c548d7a2",
+      "sha256": "082fe6da2a163a2a8f053f8c0fbb87c413d45dc0eaa0639ebf36a40710f4719c",
       "mode": "0755"
     },
     {
@@ -429,7 +429,7 @@
     },
     {
       "name": "support-common.sh",
-      "sha256": "9d4a856a31777ee7cd7ac6b2b0de9c97b86812616404d6d61e44edcabd167091",
+      "sha256": "0e718e9452716800db1dbb8822e565bb23d9535c2cb34bf8c9d949149bcfac41",
       "mode": "0755"
     },
     {

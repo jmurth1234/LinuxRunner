@@ -2,6 +2,8 @@
 
 Date: 2026-11-06. Base: `direct-kms-display` at `2f61844`.
 
+This is the initial audit record. The 2026-11-07 changes and remaining checks are in [UI audit fixes](UI_AUDIT_FIXES.md).
+
 ## Changes in this branch
 
 - Publish the compositor runtime directory with its Wayland socket. Hyprland uses a shorter directory than the initial session directory. Keep the existing session bus address.

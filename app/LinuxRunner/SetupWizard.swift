@@ -25,17 +25,19 @@ struct SetupWizardView: View {
     @State private var problem: String?
     @State private var desktopReady = false
     @State private var extraDesktops: Set<String> = []
+    @ObservedObject private var installMonitor = InstallMonitor.shared
+    private var blocksDismissal: Bool { debian.running || arch.running || manager.busy || (working != nil && step == .account) }
     private var step: SetupStep { SetupStep(rawValue: stepRaw) ?? .welcome }
 
     var body: some View {
         NavigationView {
             Form { content }
                 .navigationTitle(title)
-                .toolbar { ToolbarItem(placement: .cancellationAction) { Button(step == .done ? "Close" : "Later") { dismiss() }.disabled(working != nil || debian.running || arch.running || manager.busy) } }
+                .toolbar { ToolbarItem(placement: .cancellationAction) { Button(step == .done ? "Close" : "Later") { dismiss() }.disabled(blocksDismissal) } }
         }
         .navigationViewStyle(.stack)
-        .overlay(alignment: .bottom) { InstallProgressCard() }
-        .interactiveDismissDisabled(working != nil || debian.running || arch.running || manager.busy)
+        .safeAreaInset(edge: .bottom, spacing: 0) { InstallProgressCard() }
+        .interactiveDismissDisabled(blocksDismissal)
         .onAppear(perform: resume)
     }
 
@@ -49,12 +51,12 @@ struct SetupWizardView: View {
     @ViewBuilder private var content: some View {
         switch step {
         case .welcome:
-            Section { Text("LinuxRunner runs real ARM64 Linux programs on this iPhone with its own interpreter — no virtual machine.")
+            Section { Text("LinuxRunner runs real ARM64 Linux programs on this device with its own interpreter — no virtual machine.")
                 Text("Setup installs Linux, creates your account and prepares the graphical desktop. Everything can be changed later in Settings.").foregroundStyle(.secondary) }
             if !manager.environments.isEmpty { Section { Text("Configure an existing environment or install another distribution. Your files and accounts are preserved.").font(.footnote) } }
             Section { Button("Continue") { stepRaw = SetupStep.distribution.rawValue } }
         case .distribution:
-            Section(footer: Text("Debian is recommended. Arch Linux ARM provides a rolling release with pacman and an experimental X11 desktop. Alpine is small and mainly for the terminal. Wayland is not supported.")) {
+            Section(footer: Text("Debian is recommended. Arch Linux ARM provides a rolling release with pacman. Debian and Arch offer experimental Wayland desktops. Alpine is small and mainly for the terminal.")) {
                 Picker("Distribution", selection: $distribution) { Text("Debian GNU/Linux 13 (ARM64) — recommended").tag("debian"); Text("Arch Linux ARM (ARM64) — experimental").tag("arch"); Text("Alpine Linux 3.24 (ARM64)").tag("alpine") }.pickerStyle(.inline).labelsHidden()
             }
             let installed = manager.environments.filter { ($0.distributionID ?? "alpine") == distribution }
@@ -75,7 +77,7 @@ struct SetupWizardView: View {
         case .desktop: desktop
         case .done:
             Section { Label("Linux is ready", systemImage: "checkmark.circle.fill").foregroundStyle(.green)
-                Text("Add applications any time from Packages › App Catalog.").font(.footnote).foregroundStyle(.secondary) }
+                Text("Add applications from Home › App Manager.").font(.footnote).foregroundStyle(.secondary) }
             Section { Button { stepRaw = SetupStep.welcome.rawValue; setupRoot = ""; dismiss(); openDesktop() } label: { Label("Open Desktop", systemImage: "desktopcomputer").font(.headline) }.disabled(!LRRuntimeBridge.isRunning()) }
         }
         if let working { Section { HStack(spacing: 12) { ProgressView(); Text(working) } } }
@@ -88,21 +90,26 @@ struct SetupWizardView: View {
         let alpineBytes = Int64((try? Bundle.main.url(forResource: "root", withExtension: "tar.gz")?.resourceValues(forKeys: [.fileSizeKey]).fileSize) ?? 0)
         let download = distribution == "debian" ? (manifest?.downloadBytes ?? 0) : 0
         let installed = distribution == "debian" ? (manifest?.installedBytes ?? 0) : alpineBytes * 3
+        let required = distribution == "debian" ? manifest.map(DebianInstaller.requiredBytes) ?? Int64.max : ArchInstaller.requiredBytes
         Section("Storage") {
             row("Download", distribution == "arch" ? "Calculated from the signed package selection" : distribution == "debian" ? ByteCountFormatter.string(fromByteCount: download, countStyle: .file) : "None (included in the app)")
             row(distribution == "debian" ? "Installed size" : "Installed size (estimate)", distribution == "arch" ? "At least 1.5 GB free for base installation" : ByteCountFormatter.string(fromByteCount: installed, countStyle: .file))
             row("Available", ByteCountFormatter.string(fromByteCount: free, countStyle: .file))
+            if distribution != "alpine", required != Int64.max {
+                row("Required free space", ByteCountFormatter.string(fromByteCount: required, countStyle: .file))
+                if free < required { Text("Free more storage before installing Linux.").foregroundStyle(.orange) }
+            }
         }
         if distribution == "debian" {
             Section {
                 if debian.running { Text(debian.message); ProgressView(value: debian.fraction); Button("Cancel", role: .destructive) { debian.cancel() } }
-                else { Button("Install Debian") { startInstall() }.disabled(free < max(Int64(1 << 30), download + installed)) }
+                else { Button("Install Debian") { startInstall() }.disabled(free < required) }
                 if let failure = debian.failure { Text(failure).foregroundStyle(.red); Button("Try Again") { startInstall() } }
             } footer: { Text("Official Debian packages, checked against Debian's signed index. The desktop, sound and account tools are added in the next steps.") }
         } else if distribution == "arch" {
             Section {
                 if arch.running { Text(arch.message); ProgressView(value: arch.fraction); Button("Cancel", role: .destructive) { arch.cancel() } }
-                else { Button("Install Arch Linux ARM") { startInstall() }.disabled(free < Int64(1_500_000_000)) }
+                else { Button("Install Arch Linux ARM") { startInstall() }.disabled(free < required) }
                 if let failure = arch.failure { Text(failure).foregroundStyle(.red); Button("Try Again") { startInstall() } }
             } footer: { Text("Official signed Arch Linux ARM packages. Verified downloads are kept for retry. First-start configuration finishes before desktop packages are installed.") }
         } else {
@@ -118,7 +125,7 @@ struct SetupWizardView: View {
             let existing = LRRuntimeBridge.linuxAccounts().filter { $0["name"] != "root" && ($0["uid"].flatMap(Int.init) ?? 0) >= 1000 }
             if !existing.isEmpty {
                 Section("Use an existing account") {
-                    ForEach(existing, id: \.self) { account in Button(account["name"] ?? "") { useAccount(account["name"] ?? "") }.disabled(working != nil) }
+                    ForEach(existing, id: \.self) { account in Button(account["name"] ?? "") { useAccount(account["name"] ?? "") }.disabled(working != nil || installMonitor.running) }
                 }
             }
             Section(existing.isEmpty ? "Create your account" : "Or create a new account") {
@@ -136,22 +143,19 @@ struct SetupWizardView: View {
     @ViewBuilder private var desktop: some View {
         Section(footer: Text("Installs the display, window manager, panel, file manager and sound once (network needed). Existing settings are kept.")) {
             HStack { Image(systemName: "checkmark.circle.fill").foregroundStyle(Color.accentColor); Text(LRRuntimeBridge.activeEnvironmentIsArch() ? "LinuxRunner Desktop (Openbox, LXQt panel, PCManFM-Qt)" : "LinuxRunner Desktop (Openbox, panel, file manager)") }
-            HStack { Image(systemName: "circle").foregroundStyle(.secondary); VStack(alignment: .leading) { Text("LXQt · Enlightenment · Wayfire · Hyprland"); Text("Optional · install below once the desktop components are ready, or later in Settings › Desktop Environment").font(.caption).foregroundStyle(.secondary) } }
-            HStack { Image(systemName: "circle").foregroundStyle(.secondary); VStack(alignment: .leading) { Text("KDE Plasma"); Text(LRRuntimeBridge.activeEnvironmentIsArch() ? "Unavailable: current Arch Plasma requires Wayland; use the X11 desktop above." : "Experimental · install later in Settings › Desktop Environment").font(.caption).foregroundStyle(.secondary) } }
+            HStack { Image(systemName: "circle").foregroundStyle(.secondary); VStack(alignment: .leading) { Text(DesktopChoice.allCases.filter { $0 != .linuxrunner && $0 != .plasma && $0.available }.map(\.title).joined(separator: " · ")); Text("Optional · install below once the desktop components are ready, or later in Settings › Desktop Environment").font(.caption).foregroundStyle(.secondary) } }
+            HStack { Image(systemName: "circle").foregroundStyle(.secondary); VStack(alignment: .leading) { Text("KDE Plasma"); Text(DesktopChoice.plasma.available ? "Experimental · install later in Settings › Desktop Environment" : "Plasma is not available for this environment.").font(.caption).foregroundStyle(.secondary) } }
         }
         Section {
             if desktopReady { Label("Desktop components installed", systemImage: "checkmark") ; Button("Continue") { stepRaw = SetupStep.done.rawValue } }
-            else { Button("Install Desktop Components") { prepareDesktop() }.disabled(working != nil) }
+            else { Button("Install Desktop Components") { prepareDesktop() }.disabled(working != nil || installMonitor.running) }
         }
         if desktopReady {
-            Section(header: Text("Another Desktop (Optional)"), footer: Text("Each comes from the distribution's own packages (network needed; Enlightenment is a large download, about 450 MB on Debian). The one installed last opens with Open Desktop; switch any time in Settings › Desktop Environment.")) {
-                extraDesktopRow("LXQt", "lxqt", installed: LRRuntimeBridge.lxqtInstalled()) { LRRuntimeBridge.installLXQt($0, completion: $1) }
-                extraDesktopRow("Enlightenment", "enlightenment", installed: LRRuntimeBridge.enlightenmentInstalled()) { LRRuntimeBridge.installEnlightenment($0, completion: $1) }
-                if LRRuntimeBridge.activeEnvironmentIsDebian() || LRRuntimeBridge.activeEnvironmentIsArch() {
-                    extraDesktopRow("Wayfire", "wayfire", installed: LRRuntimeBridge.wayfireInstalled()) { LRRuntimeBridge.installWayfire($0, completion: $1) }
-                }
-                if LRRuntimeBridge.activeEnvironmentIsArch() {
-                    extraDesktopRow("Hyprland (experimental)", "hyprland", installed: LRRuntimeBridge.hyprlandInstalled()) { LRRuntimeBridge.installHyprland($0, completion: $1) }
+            Section(header: Text("Another Desktop (Optional)"), footer: Text("Each desktop comes from the distribution's packages and needs a network connection. The one installed last opens with Open Desktop; switch any time in Settings › Desktop Environment.")) {
+                ForEach(DesktopChoice.allCases.filter { $0 != .linuxrunner && $0 != .plasma && $0.available }) { desktop in
+                    extraDesktopRow(desktop.title, desktop.rawValue, installed: desktop.installed) {
+                        desktop.install(progress: $0, completion: $1)
+                    }
                 }
             }
         }
@@ -211,6 +215,7 @@ struct SetupWizardView: View {
         if installed || extraDesktops.contains(tag) { Label(title + " installed", systemImage: "checkmark") }
         else {
             Button("Install " + title) {
+                guard !installMonitor.running else { return }
                 problem = nil; working = "Starting"
                 install({ working = $0 }) { error in
                     working = nil
@@ -219,7 +224,7 @@ struct SetupWizardView: View {
                     // Same per-environment choice as Settings › Desktop Environment.
                     UserDefaults.standard.set(tag, forKey: "LinuxRunnerDesktop.environment." + LRRuntimeBridge.activeRootName())
                 }
-            }.disabled(working != nil)
+            }.disabled(working != nil || installMonitor.running)
         }
     }
 

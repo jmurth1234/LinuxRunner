@@ -674,6 +674,7 @@ extern void drm_refresh_native_display(void);
 @property UIStackView *startButtons;
 @property LRAudioBridge *audio; // session sound; lives as long as the session, not the viewer
 @property uint16_t audioPort;
+@property BOOL audioUnavailable;
 @property BOOL viewerVisible;
 @property BOOL trackpadRequested;
 @end
@@ -841,6 +842,8 @@ API_AVAILABLE(ios(27.0))
 #include "../../tests/linuxrunner/gui/external_display_contract.inc"
 #endif
 static NSString *DesktopDegradedNotice(NSString *state);
+static __weak LRGUIViewController *LRLegacyInstallerController;
+
 @implementation LRGUIViewController
 + (void)registerExternalDisplayForController:(UIViewController *)controller {
 #if __IPHONE_OS_VERSION_MAX_ALLOWED >= 270000 && !TARGET_OS_MACCATALYST
@@ -903,26 +906,26 @@ static NSString *DesktopDegradedNotice(NSString *state);
     _stack=[UIStackView new];_stack.axis=UILayoutConstraintAxisVertical;_stack.spacing=10;_stack.translatesAutoresizingMaskIntoConstraints=NO;[self.view addSubview:_stack];
     [NSLayoutConstraint activateConstraints:@[[_stack.topAnchor constraintEqualToAnchor:self.view.safeAreaLayoutGuide.topAnchor constant:8],[_stack.leadingAnchor constraintEqualToAnchor:self.view.safeAreaLayoutGuide.leadingAnchor constant:12],[_stack.trailingAnchor constraintEqualToAnchor:self.view.safeAreaLayoutGuide.trailingAnchor constant:-12],[_stack.bottomAnchor constraintEqualToAnchor:self.view.keyboardLayoutGuide.topAnchor constant:-8]]];
     UIStackView *actions=[UIStackView new];actions.spacing=12;actions.distribution=UIStackViewDistributionFillEqually;
-    for(NSArray *item in @[@[@"Install GUI Support",@"install"],@[@"Run X11 Test",@"runTest"],@[@"Run xterm",@"runXterm"]]){UIButton *b=[UIButton buttonWithType:UIButtonTypeSystem];[b setTitle:item[0] forState:UIControlStateNormal];b.titleLabel.font=[UIFont systemFontOfSize:13];b.accessibilityIdentifier=item[0];[b addTarget:self action:NSSelectorFromString(item[1]) forControlEvents:UIControlEventTouchUpInside];[actions addArrangedSubview:b];}
+    for(NSArray *item in @[@[@"Install GUI Support",@"install"],@[@"Run X11 Test",@"runTest"],@[@"Run xterm",@"runXterm"]]){UIButton *b=[UIButton buttonWithType:UIButtonTypeSystem];[b setTitle:item[0] forState:UIControlStateNormal];b.titleLabel.font=[UIFont preferredFontForTextStyle:UIFontTextStyleCaption1];b.titleLabel.adjustsFontForContentSizeCategory=YES;b.accessibilityIdentifier=item[0];[b addTarget:self action:NSSelectorFromString(item[1]) forControlEvents:UIControlEventTouchUpInside];[actions addArrangedSubview:b];}
     [_stack addArrangedSubview:actions];
     UIButton *clock=[UIButton buttonWithType:UIButtonTypeSystem];[clock setTitle:@"Run xclock" forState:UIControlStateNormal];[clock addTarget:self action:@selector(runXclock) forControlEvents:UIControlEventTouchUpInside];clock.accessibilityIdentifier=@"Run xclock";[_stack addArrangedSubview:clock];
     UIStackView *apps=[UIStackView new];apps.distribution=UIStackViewDistributionFillEqually;
-    for(NSArray *item in @[@[@"Install Qt Support",@"installQt"],@[@"Run Qt Test",@"runQt"],@[@"Run App…",@"configureApp"],@[@"GPU Bridge Test",@"runGPUBridge"],@[@"Metal Gears",@"runGPUGears"],@[@"GLES2 Gears",@"runGPUGears2"],@[@"GLES2 Textures",@"runGPUTextures"],@[@"GLES2 Targets",@"runGPUTargets"],@[@"GLX Metal Check",@"runGLXMetalCheck"],@[@"GLX Metal App",@"runGLXMetalApp"]]){UIButton *b=[UIButton buttonWithType:UIButtonTypeSystem];[b setTitle:item[0] forState:UIControlStateNormal];b.titleLabel.font=[UIFont systemFontOfSize:13];b.accessibilityIdentifier=item[0];[b addTarget:self action:NSSelectorFromString(item[1]) forControlEvents:UIControlEventTouchUpInside];[apps addArrangedSubview:b];}
+    for(NSArray *item in @[@[@"Install Qt Support",@"installQt"],@[@"Run Qt Test",@"runQt"],@[@"Run App…",@"configureApp"],@[@"GPU Bridge Test",@"runGPUBridge"],@[@"Metal Gears",@"runGPUGears"],@[@"GLES2 Gears",@"runGPUGears2"],@[@"GLES2 Textures",@"runGPUTextures"],@[@"GLES2 Targets",@"runGPUTargets"],@[@"GLX Metal Check",@"runGLXMetalCheck"],@[@"GLX Metal App",@"runGLXMetalApp"]]){UIButton *b=[UIButton buttonWithType:UIButtonTypeSystem];[b setTitle:item[0] forState:UIControlStateNormal];b.titleLabel.font=[UIFont preferredFontForTextStyle:UIFontTextStyleCaption1];b.titleLabel.adjustsFontForContentSizeCategory=YES;b.accessibilityIdentifier=item[0];[b addTarget:self action:NSSelectorFromString(item[1]) forControlEvents:UIControlEventTouchUpInside];[apps addArrangedSubview:b];}
     [_stack addArrangedSubview:apps];
     UIStackView *mesaActions=[UIStackView new];mesaActions.distribution=UIStackViewDistributionFillEqually;mesaActions.spacing=8;
-    for(NSArray *item in @[@[@"Mesa GL Check",@"runMesaGLCheck"],@[@"Hybrid Check",@"runMesaMetalCheck"]]){UIButton *b=[UIButton buttonWithType:UIButtonTypeSystem];[b setTitle:item[0] forState:UIControlStateNormal];b.titleLabel.font=[UIFont systemFontOfSize:14];b.accessibilityIdentifier=item[0];[b addTarget:self action:NSSelectorFromString(item[1]) forControlEvents:UIControlEventTouchUpInside];[mesaActions addArrangedSubview:b];}
+    for(NSArray *item in @[@[@"Mesa GL Check",@"runMesaGLCheck"],@[@"Hybrid Check",@"runMesaMetalCheck"]]){UIButton *b=[UIButton buttonWithType:UIButtonTypeSystem];[b setTitle:item[0] forState:UIControlStateNormal];b.titleLabel.font=[UIFont preferredFontForTextStyle:UIFontTextStyleCaption1];b.titleLabel.adjustsFontForContentSizeCategory=YES;b.accessibilityIdentifier=item[0];[b addTarget:self action:NSSelectorFromString(item[1]) forControlEvents:UIControlEventTouchUpInside];[mesaActions addArrangedSubview:b];}
     [_stack addArrangedSubview:mesaActions];
     UIStackView *blenderActions=[UIStackView new];blenderActions.distribution=UIStackViewDistributionFillEqually;blenderActions.spacing=8;
-    for(NSArray *item in @[@[@"Blender Software",@"runBlenderSoftware"],@[@"Blender Hybrid",@"runBlenderHybrid"]]){UIButton *b=[UIButton buttonWithType:UIButtonTypeSystem];[b setTitle:item[0] forState:UIControlStateNormal];b.titleLabel.font=[UIFont systemFontOfSize:14];b.accessibilityIdentifier=item[0];[b addTarget:self action:NSSelectorFromString(item[1]) forControlEvents:UIControlEventTouchUpInside];[blenderActions addArrangedSubview:b];}
+    for(NSArray *item in @[@[@"Blender Software",@"runBlenderSoftware"],@[@"Blender Hybrid",@"runBlenderHybrid"]]){UIButton *b=[UIButton buttonWithType:UIButtonTypeSystem];[b setTitle:item[0] forState:UIControlStateNormal];b.titleLabel.font=[UIFont preferredFontForTextStyle:UIFontTextStyleCaption1];b.titleLabel.adjustsFontForContentSizeCategory=YES;b.accessibilityIdentifier=item[0];[b addTarget:self action:NSSelectorFromString(item[1]) forControlEvents:UIControlEventTouchUpInside];[blenderActions addArrangedSubview:b];}
     [_stack addArrangedSubview:blenderActions];
     UIStackView *browsers=[UIStackView new];browsers.distribution=UIStackViewDistributionFillEqually;
-    for(NSArray *item in @[@[@"Install Browser Support",@"installBrowser"],@[@"Run LinuxRunner Browser",@"runBrowser"],@[@"Run Firefox",@"runFirefox"]]){UIButton *b=[UIButton buttonWithType:UIButtonTypeSystem];[b setTitle:item[0] forState:UIControlStateNormal];b.titleLabel.font=[UIFont systemFontOfSize:12];b.titleLabel.numberOfLines=2;b.accessibilityIdentifier=item[0];[b addTarget:self action:NSSelectorFromString(item[1]) forControlEvents:UIControlEventTouchUpInside];[browsers addArrangedSubview:b];}
-    [_stack addArrangedSubview:browsers];_resolution=[[UISegmentedControl alloc] initWithItems:_desktopMode?@[@"640×480",@"800×600",@"1024×768",@"960×540",@"Fit"]:@[@"640×480",@"800×600",@"1024×768"]];_resolution.selectedSegmentIndex=_desktopMode?MAX(0,MIN(4,[NSUserDefaults.standardUserDefaults integerForKey:[@"LinuxRunnerDesktop.resolution." stringByAppendingString:LRRuntimeBridge.activeRootName]])):0;if(_desktopMode&&![NSUserDefaults.standardUserDefaults objectForKey:[@"LinuxRunnerDesktop.resolution." stringByAppendingString:LRRuntimeBridge.activeRootName]])_resolution.selectedSegmentIndex=3;_resolution.accessibilityIdentifier=@"Display resolution";[_stack addArrangedSubview:_resolution];_launchControls=@[actions,apps,mesaActions,blenderActions,browsers,clock,_resolution];_status=[UILabel new];_status.numberOfLines=0;_status.font=[UIFont systemFontOfSize:13];_status.accessibilityIdentifier=@"GUI status";_status.text=@"Install GUI Support in this environment, then open xclock or xterm. Install Qt Support for the Qt test. DISPLAY and authentication are set automatically per session. Debian GUI/browser acceptance requires physical testing.";[_stack addArrangedSubview:_status];
+    for(NSArray *item in @[@[@"Install Browser Support",@"installBrowser"],@[@"Run LinuxRunner Browser",@"runBrowser"],@[@"Run Firefox",@"runFirefox"]]){UIButton *b=[UIButton buttonWithType:UIButtonTypeSystem];[b setTitle:item[0] forState:UIControlStateNormal];b.titleLabel.font=[UIFont preferredFontForTextStyle:UIFontTextStyleCaption1];b.titleLabel.adjustsFontForContentSizeCategory=YES;b.titleLabel.numberOfLines=2;b.accessibilityIdentifier=item[0];[b addTarget:self action:NSSelectorFromString(item[1]) forControlEvents:UIControlEventTouchUpInside];[browsers addArrangedSubview:b];}
+    [_stack addArrangedSubview:browsers];_resolution=[[UISegmentedControl alloc] initWithItems:_desktopMode?@[@"640×480",@"800×600",@"1024×768",@"960×540",@"Fit"]:@[@"640×480",@"800×600",@"1024×768"]];_resolution.selectedSegmentIndex=_desktopMode?MAX(0,MIN(4,[NSUserDefaults.standardUserDefaults integerForKey:[@"LinuxRunnerDesktop.resolution." stringByAppendingString:LRRuntimeBridge.activeRootName]])):0;if(_desktopMode&&![NSUserDefaults.standardUserDefaults objectForKey:[@"LinuxRunnerDesktop.resolution." stringByAppendingString:LRRuntimeBridge.activeRootName]])_resolution.selectedSegmentIndex=3;_resolution.accessibilityIdentifier=@"Display resolution";[_stack addArrangedSubview:_resolution];_launchControls=@[actions,apps,mesaActions,blenderActions,browsers,clock,_resolution];_status=[UILabel new];_status.adjustsFontForContentSizeCategory=YES;_status.numberOfLines=0;_status.font=[UIFont preferredFontForTextStyle:UIFontTextStyleCaption1];_status.accessibilityIdentifier=@"GUI status";_status.text=@"Install GUI Support in this environment, then open xclock or xterm. Install Qt Support for the Qt test. DISPLAY and authentication are set automatically per session. Debian GUI/browser acceptance requires physical testing.";[_stack addArrangedSubview:_status];
     _surface=[LRFramebufferView new];[_stack addArrangedSubview:_surface];[_surface.heightAnchor constraintGreaterThanOrEqualToConstant:100].active=YES;
     _modifierButtons=[NSMutableArray new];
     UIStackView *toolbar=[UIStackView new];_inputToolbar=toolbar;toolbar.spacing=4;toolbar.distribution=UIStackViewDistributionFillEqually;
     UIStackView *arrows=[UIStackView new];arrows.spacing=4;arrows.distribution=UIStackViewDistributionFillEqually;
-    for(NSString *title in @[@"Keyboard",@"Esc",@"Tab",@"Shift",@"Ctrl",@"Alt",@"Super",@"←",@"↑",@"↓",@"→",@"Close"]){UIButton *b=[UIButton buttonWithType:UIButtonTypeSystem];[b setTitle:title forState:UIControlStateNormal];b.titleLabel.font=[UIFont systemFontOfSize:12];b.accessibilityIdentifier=[@"GUI " stringByAppendingString:title];
+    for(NSString *title in @[@"Keyboard",@"Esc",@"Tab",@"Shift",@"Ctrl",@"Alt",@"Super",@"←",@"↑",@"↓",@"→",@"Close"]){UIButton *b=[UIButton buttonWithType:UIButtonTypeSystem];[b setTitle:title forState:UIControlStateNormal];b.titleLabel.font=[UIFont preferredFontForTextStyle:UIFontTextStyleCaption1];b.titleLabel.adjustsFontForContentSizeCategory=YES;b.accessibilityIdentifier=[@"GUI " stringByAppendingString:title];
         if([@[@"Shift",@"Ctrl",@"Alt",@"Super"] containsObject:title])[_modifierButtons addObject:b];
         if([title isEqual:@"Keyboard"]){[b setTitle:@"" forState:UIControlStateNormal];[b setImage:[UIImage systemImageNamed:@"keyboard"] forState:UIControlStateNormal];b.accessibilityLabel=@"Keyboard";}[b addTarget:self action:@selector(tool:) forControlEvents:UIControlEventTouchUpInside];[b.heightAnchor constraintEqualToConstant:44].active=YES;
         if([@[@"←",@"↑",@"↓",@"→"] containsObject:title])[arrows addArrangedSubview:b];else [toolbar addArrangedSubview:b];}
@@ -930,29 +933,30 @@ static NSString *DesktopDegradedNotice(NSString *state);
     UISegmentedControl *secondary=[[UISegmentedControl alloc] initWithItems:@[@"Right click: long press",@"Right click: two-finger tap"]];secondary.selectedSegmentIndex=0;[secondary addTarget:self action:@selector(secondaryMode:) forControlEvents:UIControlEventValueChanged];[_stack addArrangedSubview:secondary];[_compactControls addObject:secondary];
     UISwitch *trace=[UISwitch new];trace.accessibilityIdentifier=@"GUI input diagnostics";
     [trace addTarget:self action:@selector(inputDiagnostics:) forControlEvents:UIControlEventValueChanged];
-    UIStackView *diagnostics=[UIStackView new];UILabel *hint=[UILabel new];hint.text=@"Log test keystrokes (includes typed text)";hint.font=[UIFont systemFontOfSize:11];[diagnostics addArrangedSubview:hint];[diagnostics addArrangedSubview:trace];[_stack addArrangedSubview:diagnostics];[_compactControls addObject:diagnostics];
+    UIStackView *diagnostics=[UIStackView new];UILabel *hint=[UILabel new];hint.text=@"Log test keystrokes (includes typed text)";hint.font=[UIFont preferredFontForTextStyle:UIFontTextStyleCaption1];[diagnostics addArrangedSubview:hint];[diagnostics addArrangedSubview:trace];[_stack addArrangedSubview:diagnostics];[_compactControls addObject:diagnostics];
     UISwitch *eagerInput=[UISwitch new];eagerInput.accessibilityIdentifier=@"GUI eager input experimental";
     eagerInput.on=[NSUserDefaults.standardUserDefaults boolForKey:@"LinuxRunnerGUIEagerInput"];
     [eagerInput addTarget:self action:@selector(eagerInputChanged:) forControlEvents:UIControlEventValueChanged];
-    UIStackView *inputPolicy=[UIStackView new];UILabel *inputHint=[UILabel new];inputHint.text=@"Eager input (experimental, next session)";inputHint.font=[UIFont systemFontOfSize:11];inputHint.numberOfLines=2;
+    UIStackView *inputPolicy=[UIStackView new];UILabel *inputHint=[UILabel new];inputHint.text=@"Eager input (experimental, next session)";inputHint.font=[UIFont preferredFontForTextStyle:UIFontTextStyleCaption1];inputHint.numberOfLines=2;
     [inputPolicy addArrangedSubview:inputHint];[inputPolicy addArrangedSubview:eagerInput];[_stack addArrangedSubview:inputPolicy];[_compactControls addObject:inputPolicy];
     UISwitch *lowLatency=[UISwitch new];lowLatency.accessibilityIdentifier=@"GUI low latency input experimental";
     lowLatency.on=[NSUserDefaults.standardUserDefaults boolForKey:@"LinuxRunnerGUILowLatencyInput"];
     [lowLatency addTarget:self action:@selector(lowLatencyInputChanged:) forControlEvents:UIControlEventValueChanged];
-    UIStackView *latencyPolicy=[UIStackView new];UILabel *latencyHint=[UILabel new];latencyHint.text=@"Low-latency input (experimental, next session)";latencyHint.font=[UIFont systemFontOfSize:11];latencyHint.numberOfLines=2;
+    UIStackView *latencyPolicy=[UIStackView new];UILabel *latencyHint=[UILabel new];latencyHint.text=@"Low-latency input (experimental, next session)";latencyHint.font=[UIFont preferredFontForTextStyle:UIFontTextStyleCaption1];latencyHint.numberOfLines=2;
     [latencyPolicy addArrangedSubview:latencyHint];[latencyPolicy addArrangedSubview:lowLatency];[_stack addArrangedSubview:latencyPolicy];[_compactControls addObject:latencyPolicy];
     UISwitch *sharedImages=[UISwitch new];sharedImages.accessibilityIdentifier=@"GUI shared images experimental";
     sharedImages.on=[NSUserDefaults.standardUserDefaults boolForKey:@"LinuxRunnerGUISharedImages"];
     [sharedImages addTarget:self action:@selector(sharedImagesChanged:) forControlEvents:UIControlEventValueChanged];
-    UIStackView *capturePolicy=[UIStackView new];UILabel *captureHint=[UILabel new];captureHint.text=@"X11 shared images (experimental, next session)";captureHint.font=[UIFont systemFontOfSize:11];captureHint.numberOfLines=2;
+    UIStackView *capturePolicy=[UIStackView new];UILabel *captureHint=[UILabel new];captureHint.text=@"X11 shared images (experimental, next session)";captureHint.font=[UIFont preferredFontForTextStyle:UIFontTextStyleCaption1];captureHint.numberOfLines=0;captureHint.adjustsFontForContentSizeCategory=YES;
     [capturePolicy addArrangedSubview:captureHint];[capturePolicy addArrangedSubview:sharedImages];[_stack addArrangedSubview:capturePolicy];[_compactControls addObject:capturePolicy];
     if(_desktopMode){
-        _immersiveButton=[UIButton buttonWithType:UIButtonTypeSystem];[_immersiveButton setImage:[UIImage systemImageNamed:@"arrow.down.right.and.arrow.up.left"] forState:UIControlStateNormal];_immersiveButton.accessibilityLabel=@"Show Desktop Controls";_immersiveButton.backgroundColor=[UIColor colorWithWhite:.1 alpha:.8];_immersiveButton.layer.cornerRadius=16;_immersiveButton.translatesAutoresizingMaskIntoConstraints=NO;_immersiveButton.hidden=YES;[_immersiveButton addTarget:self action:@selector(toggleImmersive) forControlEvents:UIControlEventTouchUpInside];[self.view addSubview:_immersiveButton];[NSLayoutConstraint activateConstraints:@[[_immersiveButton.topAnchor constraintEqualToAnchor:self.view.safeAreaLayoutGuide.topAnchor constant:4],[_immersiveButton.trailingAnchor constraintEqualToAnchor:self.view.safeAreaLayoutGuide.trailingAnchor constant:-8],[_immersiveButton.widthAnchor constraintEqualToConstant:32],[_immersiveButton.heightAnchor constraintEqualToConstant:32]]];
+        _immersiveButton=[UIButton buttonWithType:UIButtonTypeSystem];[_immersiveButton setImage:[UIImage systemImageNamed:@"arrow.down.right.and.arrow.up.left"] forState:UIControlStateNormal];_immersiveButton.accessibilityLabel=@"Show Desktop Controls";_immersiveButton.backgroundColor=[UIColor colorWithWhite:.1 alpha:.8];_immersiveButton.layer.cornerRadius=16;_immersiveButton.translatesAutoresizingMaskIntoConstraints=NO;_immersiveButton.hidden=YES;[_immersiveButton addTarget:self action:@selector(toggleImmersive) forControlEvents:UIControlEventTouchUpInside];[self.view addSubview:_immersiveButton];[NSLayoutConstraint activateConstraints:@[[_immersiveButton.topAnchor constraintEqualToAnchor:self.view.safeAreaLayoutGuide.topAnchor constant:4],[_immersiveButton.trailingAnchor constraintEqualToAnchor:self.view.safeAreaLayoutGuide.trailingAnchor constant:-8],[_immersiveButton.widthAnchor constraintEqualToConstant:44],[_immersiveButton.heightAnchor constraintEqualToConstant:44]]];
         for(UIView *v in _launchControls)v.hidden=YES;for(UIView*v in _compactControls)v.hidden=YES;_status.text=@"Open Desktop starts a real Linux window manager. The first start in an environment installs desktop support automatically (network required).";}
     [NSNotificationCenter.defaultCenter addObserver:self selector:@selector(background) name:UIApplicationWillResignActiveNotification object:nil];
     [NSNotificationCenter.defaultCenter addObserver:self selector:@selector(foreground) name:UIApplicationDidBecomeActiveNotification object:nil];
     __weak typeof(self) weak=self;
-    _exitObserver=[NSNotificationCenter.defaultCenter addObserverForName:@"ProcessExitedNotification" object:nil queue:NSOperationQueue.mainQueue usingBlock:^(NSNotification *n){typeof(self) self=weak;if(self&&self.sessionTerminal.sessionPid>0&&[n.userInfo[@"pid"] intValue]==self.sessionTerminal.sessionPid){BOOL starting=self.startState==LRStartSession;[self stop];NSString *detail=[NSString stringWithContentsOfURL:[self.sessionURL URLByAppendingPathComponent:@"session.log"] encoding:NSUTF8StringEncoding error:nil];
+    _exitObserver=[NSNotificationCenter.defaultCenter addObserverForName:@"ProcessExitedNotification" object:nil queue:NSOperationQueue.mainQueue usingBlock:^(NSNotification *n){typeof(self) self=weak;if(self&&self.sessionTerminal.sessionPid>0&&[n.userInfo[@"pid"] intValue]==self.sessionTerminal.sessionPid){BOOL stopping=[NSFileManager.defaultManager fileExistsAtPath:[self.sessionURL URLByAppendingPathComponent:@"stop"].path];BOOL starting=self.startState==LRStartSession;[self stop];
+        if(stopping){self.startState=LRStartIdle;[self hideStartPanel];self.status.text=@"Desktop stopped. Saved files and terminal sessions are kept.";return;}NSString *detail=LRDiagnosticTailString(LRReadDiagnosticTail([self.sessionURL URLByAppendingPathComponent:@"session.log"],65536));
         NSString *last=@"GUI session exited";for(NSString *line in [detail componentsSeparatedByString:@"\n"])if([line hasPrefix:@"GUI_SESSION:"]&&![line containsString:@"cleaned up"])last=line;
         if(self.desktopMode){[self traceSessionLog:detail];[LRRuntimeBridge desktopTrace:@"09 desktop" result:@"fail" detail:[NSString stringWithFormat:@"session process exited code=%@ while start-state=%ld painted=%d last=%@",n.userInfo[@"code"],(long)self.startState,self.desktopPainted,last]];}
         self.status.text=ApplicationPreflightFailure(self.sessionURL)?:[NSString stringWithFormat:@"%@. CLI remains available. GUI Logs includes application stdout/stderr.",last];
@@ -963,7 +967,7 @@ static NSString *DesktopDegradedNotice(NSString *state);
             else if(starting)[self desktopStartFailed:@"The desktop could not start" detail:[NSString stringWithFormat:@"%@\n\nError: DESKTOP_STARTUP_ERROR. Tap Retry; Details shows the session log.",last]];
             else{
                 // Name the desktop component that ended and its last error line.
-                NSString *app=[NSString stringWithContentsOfURL:[self.sessionURL URLByAppendingPathComponent:@"application.log"] encoding:NSUTF8StringEncoding error:nil],*component=nil;
+                NSString *app=LRDiagnosticTailString(LRReadDiagnosticTail([self.sessionURL URLByAppendingPathComponent:@"application.log"],65536)),*component=nil;
                 for(NSString *line in [app componentsSeparatedByString:@"\n"])if([line containsString:@"component_exited"])component=line;
                 NSString *cause=last;
                 if(component){cause=component;NSRange n=[component rangeOfString:@"("];NSRange e=[component rangeOfString:@")"];
@@ -1015,9 +1019,11 @@ static NSString *DesktopDegradedNotice(NSString *state);
 }
 - (void)showStartStage:(NSString *)title detail:(NSString *)detail busy:(BOOL)busy{
     [self buildStartPanel];[self.view bringSubviewToFront:_startPanel];
+    BOOL changed=![_startTitle.text isEqual:title];
     _startPanel.hidden=NO;_startTitle.text=title;_startDetail.text=detail;_startButtons.hidden=busy;
     if(busy)[_startSpinner startAnimating];else [_startSpinner stopAnimating];_startSpinner.hidden=!busy;
     _status.text=title;
+    if(changed&&UIAccessibilityIsVoiceOverRunning())UIAccessibilityPostNotification(UIAccessibilityAnnouncementNotification,title);
 }
 - (void)hideStartPanel{_startPanel.hidden=YES;[_startSpinner stopAnimating];}
 - (NSString *)supportText:(NSString *)name{return [[NSString stringWithContentsOfURL:[_supportURL URLByAppendingPathComponent:name] encoding:NSUTF8StringEncoding error:nil] stringByTrimmingCharactersInSet:NSCharacterSet.whitespaceAndNewlineCharacterSet];}
@@ -1061,21 +1067,21 @@ static NSString *DesktopDegradedNotice(NSString *state);
     }];
 }
 - (NSString *)latestProfileLine:(NSString *)prefix{
-    NSString *log=[NSString stringWithContentsOfURL:[_supportURL URLByAppendingPathComponent:@"desktop-profile.sh.log"] encoding:NSUTF8StringEncoding error:nil];NSString *found=nil;
+    NSString *log=LRCachedDiagnosticTail([_supportURL URLByAppendingPathComponent:@"desktop-profile.sh.log"],65536);NSString *found=nil;
     for(NSString *line in [log componentsSeparatedByString:@"\n"])if([line hasPrefix:prefix])found=[line substringFromIndex:prefix.length];
     return [found stringByTrimmingCharactersInSet:NSCharacterSet.whitespaceCharacterSet];
 }
 // Latest progress line from the installer log: package-lock waits
 // (PACKAGE_STAGE, e.g. Debian's first-start configuration) or profile stages.
 - (NSString *)latestProgress{
-    NSString *log=[NSString stringWithContentsOfURL:[_supportURL URLByAppendingPathComponent:@"desktop-profile.sh.log"] encoding:NSUTF8StringEncoding error:nil];NSString *found=nil;
+    NSString *log=LRCachedDiagnosticTail([_supportURL URLByAppendingPathComponent:@"desktop-profile.sh.log"],65536);NSString *found=nil;
     for(NSString *line in [log componentsSeparatedByString:@"\n"])for(NSString *prefix in @[@"PROFILE_STAGE: ",@"PACKAGE_STAGE: "])if([line hasPrefix:prefix])found=[line substringFromIndex:prefix.length];
     return found;
 }
 // The installer's structured failure (PROFILE_FAILURE / PACKAGE_LOCK category=…)
 // as a title and an explanation with the safe next step.
 - (NSArray<NSString *> *)profileFailureMessage{
-    NSString *log=[NSString stringWithContentsOfURL:[_supportURL URLByAppendingPathComponent:@"desktop-profile.sh.log"] encoding:NSUTF8StringEncoding error:nil];
+    NSString *log=LRDiagnosticTailString(LRReadDiagnosticTail([_supportURL URLByAppendingPathComponent:@"desktop-profile.sh.log"],65536));
     NSString *category=@"UNKNOWN",*detail=nil;
     for(NSString *line in [log componentsSeparatedByString:@"\n"]){
         NSRange c=[line rangeOfString:@"category="];if(c.location==NSNotFound||!([line hasPrefix:@"PROFILE_FAILURE:"]||[line hasPrefix:@"PACKAGE_LOCK:"]))continue;
@@ -1090,7 +1096,7 @@ static NSString *DesktopDegradedNotice(NSString *state);
         @"PACKAGE_DATABASE_RECOVERY_REQUIRED":@[@"Debian's package setup needs to finish",@"An earlier installation was interrupted. Tap Retry to let it complete."],
         @"TLS_CERTIFICATE_ERROR":@[@"Could not verify the Debian server certificate",@"Certificate checking stays on. Tap Retry; if it repeats, check the date and time in iOS Settings."],
         @"NETWORK_UNAVAILABLE":@[@"No connection to the Debian servers",@"Check Wi-Fi or mobile data, then tap Retry."],
-        @"INSUFFICIENT_STORAGE":@[@"Not enough storage",@"Free some space on the iPhone, then tap Retry."],
+        @"INSUFFICIENT_STORAGE":@[@"Not enough storage",@"Free some space on this device, then tap Retry."],
         @"PACKAGE_NOT_FOUND":@[@"A desktop package is not available",@"The Debian servers did not offer a required package. Tap Retry later."],
         @"DEPENDENCY_CONFLICT":@[@"Package dependencies conflict",@"Details shows which packages; this environment may have been changed manually."],
         @"REPOSITORY_METADATA_ERROR":@[@"Debian package lists could not be read",@"Tap Retry; if it repeats, the Debian servers may be updating."],
@@ -1134,7 +1140,7 @@ static NSString *DesktopDegradedNotice(NSString *state);
         // it could not run (e.g. another package operation holds the lock).
         if((ended&&age>5)||age>3600){[_profileTimer invalidate];_profileTimer=nil;_profileTerminal=nil;
             [LRRuntimeBridge desktopTrace:@"repair" result:@"fail" detail:[NSString stringWithFormat:@"installer ended without a result after %.0fs",age]];
-            NSString *lock=[[NSString stringWithContentsOfURL:[_supportURL URLByAppendingPathComponent:@"desktop-profile.sh.log"] encoding:NSUTF8StringEncoding error:nil] containsString:@"PACKAGE_LOCK"]?@" Another package operation was running.":@"";
+            NSString *lock=[LRDiagnosticTailString(LRReadDiagnosticTail([_supportURL URLByAppendingPathComponent:@"desktop-profile.sh.log"],65536)) containsString:@"PACKAGE_LOCK"]?@" Another package operation was running.":@"";
             [self desktopStartFailed:@"The installer stopped early" detail:[NSString stringWithFormat:@"It ended without a result.%@ Tap Retry.",lock]];}
     }
 }
@@ -1158,7 +1164,7 @@ static NSString *DesktopDegradedNotice(NSString *state);
     for(NSString *line in [log componentsSeparatedByString:@"\n"])for(NSArray *m in marks){
         if(![line hasPrefix:m[0]]||[_traceSessionMarks containsObject:m[0]])continue;
         [_traceSessionMarks addObject:m[0]];[LRRuntimeBridge desktopTrace:m[1] result:m[2] detail:[line substringToIndex:MIN(line.length,(NSUInteger)200)]];}
-    NSString *app=[NSString stringWithContentsOfURL:[_sessionURL URLByAppendingPathComponent:@"application.log"] encoding:NSUTF8StringEncoding error:nil];
+    NSString *app=LRDiagnosticTailString(LRReadDiagnosticTail([_sessionURL URLByAppendingPathComponent:@"application.log"],65536));
     for(NSString *line in [app componentsSeparatedByString:@"\n"]){
         if(![line hasPrefix:@"DESKTOP_STARTUP:"]||[_traceSessionMarks containsObject:line])continue;
         [_traceSessionMarks addObject:line];
@@ -1207,7 +1213,7 @@ static NSString *LRTail(NSURL *url,NSUInteger lines){
     NSMutableString *shares=[NSMutableString new];
     for(NSDictionary *f in LRRuntimeBridge.sharedFolders)[shares appendFormat:@"%@ available=%@ kind=%@\n",f[@"mountPoint"],f[@"available"],[f[@"path"] containsString:@"Mobile Documents"]?@"iCloud":[f[@"path"] containsString:@"/LiveFiles/"]?@"external drive":[f[@"path"] containsString:@"File Provider Storage"]?@"On My iPhone/app":@"other"];
     for(NSString *line in LRRuntimeBridge.logLines)if([line containsString:@"[FILES]"])[shares appendFormat:@"%@\n",line];
-    [text appendFormat:@"\n== shared iPhone folders\n%@",shares.length?shares:@"none\n"];
+    [text appendFormat:@"\n== shared folders\n%@",shares.length?shares:@"none\n"];
     NSURL *support=[[LRRuntimeBridge exchangeURL:LRRuntimeBridge.activeRootName] URLByAppendingPathComponent:LRGUIFolder isDirectory:YES];
     NSURL *session=controller.sessionURL;
     void (^finish)(NSString *)=^(NSString *guest){
@@ -1237,12 +1243,12 @@ static NSString *LRTail(NSURL *url,NSUInteger lines){
 // that shows no picture within 4 minutes is reported, never waited on forever.
 - (void)sessionTick{
     if(_startState!=LRStartSession){[_profileTimer invalidate];_profileTimer=nil;return;}
-    NSString *log=_sessionURL?[NSString stringWithContentsOfURL:[_sessionURL URLByAppendingPathComponent:@"session.log"] encoding:NSUTF8StringEncoding error:nil]:nil;
+    NSString *log=_sessionURL?LRCachedDiagnosticTail([_sessionURL URLByAppendingPathComponent:@"session.log"],65536):nil;
     if([log containsString:@"GUI_SESSION: keyboard="])_startTitle.text=@"Starting the desktop";
     [self traceSessionLog:log];
     [self updateStartupStatus];
     if(_startState!=LRStartSession)return;
-    NSString *state=[NSString stringWithContentsOfURL:[_sessionURL URLByAppendingPathComponent:@"desktop-state"] encoding:NSUTF8StringEncoding error:nil];
+    NSString *state=LRCachedDiagnosticTail([_sessionURL URLByAppendingPathComponent:@"desktop-state"],8192);
     if(DesktopDegradedNotice(state)){[self desktopStartFailed:@"Desktop components could not initialize" detail:DesktopDegradedNotice(state)];return;}
     if(_sessionTerminal.sessionPid<=0||[NSFileManager.defaultManager fileExistsAtPath:[_sessionURL URLByAppendingPathComponent:@"stop"].path]){[self desktopStartFailed:@"The desktop session stopped" detail:@"Details contains the component startup logs. Existing Linux files are preserved."];return;}
     if(-[_profileStarted timeIntervalSinceNow]>240){[_profileTimer invalidate];_profileTimer=nil;
@@ -1257,7 +1263,7 @@ static NSString *LRTail(NSURL *url,NSUInteger lines){
 - (void)desktopStartDetails{
     NSMutableString *text=[NSMutableString stringWithFormat:@"%@\n",_startFailure?:@"Desktop startup"];
     for(NSString *name in @[@"profile-check.result",@"desktop-profile.sh.log"]){NSString *body=[self supportText:name];if(body.length)[text appendFormat:@"\n== %@\n%@\n",name,body.length>6000?[body substringFromIndex:body.length-6000]:body];}
-    NSString *session=_sessionURL?[NSString stringWithContentsOfURL:[_sessionURL URLByAppendingPathComponent:@"session.log"] encoding:NSUTF8StringEncoding error:nil]:nil;
+    NSString *session=_sessionURL?LRDiagnosticTailString(LRReadDiagnosticTail([_sessionURL URLByAppendingPathComponent:@"session.log"],65536)):nil;
     if(session.length)[text appendFormat:@"\n== session.log\n%@\n",session.length>6000?[session substringFromIndex:session.length-6000]:session];
     UIViewController *vc=[UIViewController new];vc.title=@"Desktop Startup Details";UITextView *view=[UITextView new];view.editable=NO;view.font=[UIFont monospacedSystemFontOfSize:11 weight:UIFontWeightRegular];view.text=text;vc.view=view;
     vc.navigationItem.rightBarButtonItem=[[UIBarButtonItem alloc] initWithBarButtonSystemItem:UIBarButtonSystemItemDone primaryAction:[UIAction actionWithHandler:^(UIAction *a){[vc dismissViewControllerAnimated:YES completion:nil];}]];
@@ -1271,14 +1277,16 @@ static NSString *LRTail(NSURL *url,NSUInteger lines){
 }
 - (void)install{[self installScript:@"install.sh"];}
 - (void)installQt{[self installScript:@"install-qt.sh"];}
++ (BOOL)supportInstallationRunning { return LRLegacyInstallerController.installerTerminal!=nil; }
 - (void)installScript:(NSString *)installer{
+    if(LRRuntimeBridge.installationRunning||[LRGUIViewController supportInstallationRunning]){[self message:@"Another support installer is open. Wait for it to finish and close its terminal before starting another installation."];return;}
     if(_client||(_desktopMode&&_sessionTerminal.sessionPid>0)){[self message:@"Stop the desktop before installing support. Save open documents first."];return;}
     NSError *error=nil;_supportURL=PrepareSupport(&error);if(!_supportURL){[self message:error.localizedDescription];return;}
     _installStatusURL=[_supportURL URLByAppendingPathComponent:@"install-result"];
     [NSFileManager.defaultManager removeItemAtURL:_installStatusURL error:nil];
     NSString *path=[NSString stringWithFormat:@"/home/mobile/Downloads/%@/installer-run.sh",LRGUIFolder];
     TerminalViewController *terminal=[LRRuntimeBridge terminalForCommand:@[@"/bin/sh",path,installer] directory:@"/root"];
-    _installerTerminal=terminal;
+    _installerTerminal=terminal;LRLegacyInstallerController=self;
     terminal.navigationItem.leftBarButtonItem=[[UIBarButtonItem alloc] initWithTitle:@"Done" style:UIBarButtonItemStyleDone target:self action:@selector(closeInstaller)];
     UINavigationController *nav=[[UINavigationController alloc] initWithRootViewController:terminal];nav.modalPresentationStyle=UIModalPresentationFullScreen;[self presentViewController:nav animated:YES completion:^{currentTerminalViewController=terminal;}];
 }
@@ -1425,12 +1433,15 @@ static NSString *LRSessionGraphicsMode(void){
     LRGUIViewController *controller=LRLatestSessionController;NSURL *session=controller.sessionURL;
     NSMutableDictionary *summary=[@{@"requested":LRSessionGraphicsMode(),@"session":@(session!=nil)} mutableCopy];
     if(!session)return summary;
-    NSString *log=[NSString stringWithContentsOfURL:[session URLByAppendingPathComponent:@"application.log"] encoding:NSUTF8StringEncoding error:nil];
-    for(NSString *line in [log componentsSeparatedByString:@"\n"])if([line hasPrefix:@"GPU_ROUTING:"])summary[@"routing"]=line;
+    NSString *log=LRCachedDiagnosticTail([session URLByAppendingPathComponent:@"application.log"],65536);
+    static NSCache *routes;static dispatch_once_t once;
+    dispatch_once(&once, ^{routes=[NSCache new];routes.countLimit=32;});
+    for(NSString *line in [log componentsSeparatedByString:@"\n"])if([line hasPrefix:@"GPU_ROUTING:"])[routes setObject:line forKey:session.path];
+    NSString *routing=[routes objectForKey:session.path];if(routing)summary[@"routing"]=routing;
     NSMutableArray *processes=[NSMutableArray array];NSURL *stats=[session URLByAppendingPathComponent:@"gpu-stats" isDirectory:YES];
     for(NSURL *file in [NSFileManager.defaultManager contentsOfDirectoryAtURL:stats includingPropertiesForKeys:nil options:0 error:nil]){
         if(![file.pathExtension isEqual:@"txt"])continue;
-        NSString *text=[NSString stringWithContentsOfURL:file encoding:NSUTF8StringEncoding error:nil];if(text.length>8192)continue;
+        NSString *text=LRDiagnosticTailString(LRReadDiagnosticTail(file,8192));
         NSMutableDictionary *values=[NSMutableDictionary dictionary];
         for(NSString *line in [text componentsSeparatedByString:@"\n"]){NSRange eq=[line rangeOfString:@"="];if(eq.location!=NSNotFound&&eq.location>0)values[[line substringToIndex:eq.location]]=[line substringFromIndex:eq.location+1];}
         if(values[@"pid"])[processes addObject:values];
@@ -1443,6 +1454,9 @@ static NSString *LRSessionGraphicsMode(void){
     if(_desktopMode)[LRRuntimeBridge desktopTrace:@"03 runtime" result:LRRuntimeBridge.isRunning?@"ok":@"fail" detail:[NSString stringWithFormat:@"run mode=%@ start-state=%ld client=%d session-pid=%d profile-ready=%d status=%@",mode,(long)_startState,_client!=nil,_sessionTerminal.sessionPid,_profileReady,LRRuntimeBridge.runtimeStatus]];
     // Re-entering a desktop is idempotent: keep its authenticated viewer and
     // server. Standalone GUI tests retain their single-display guard.
+    if(_desktopMode&&_sessionTerminal.sessionPid>0&&[NSFileManager.defaultManager fileExistsAtPath:[_sessionURL URLByAppendingPathComponent:@"stop"].path]) {
+        [self message:@"The desktop is stopping. Wait for it to stop before starting another desktop."];return;
+    }
     if(_client&&_desktopMode){
         if(_sessionTerminal.sessionPid>0&&_sessionURL&&![NSFileManager.defaultManager fileExistsAtPath:[_sessionURL URLByAppendingPathComponent:@"stop"].path]){[self updateStartupStatus];return;}
         [self detachViewer]; // ended owned session; never stop unrelated guests
@@ -1451,6 +1465,7 @@ static NSString *LRSessionGraphicsMode(void){
     if(_desktopMode&&_sessionTerminal.sessionPid>0&&_sessionURL&&![NSFileManager.defaultManager fileExistsAtPath:[_sessionURL URLByAppendingPathComponent:@"stop"].path]){[self connectDesktopViewer];return;}
     if(![LRRuntimeBridge isRunning]){if(_desktopMode)[self desktopStartFailed:@"Linux is not running" detail:[NSString stringWithFormat:@"%@\n\nError: RUNTIME_NOT_RUNNING. Tap Retry once Linux has started.",LRRuntimeBridge.runtimeStatus]];else [self message:LRRuntimeBridge.runtimeStatus];return;}
     NSString *desktopChoice=[NSUserDefaults.standardUserDefaults stringForKey:[@"LinuxRunnerDesktop.environment." stringByAppendingString:LRRuntimeBridge.activeRootName]];
+    if(!desktopChoice&&LRRuntimeBridge.activeEnvironmentIsDebian)desktopChoice=[NSUserDefaults.standardUserDefaults stringForKey:@"LinuxRunnerDesktop.environment"];
     if(_desktopMode&&desktopChoice.length&&[@[@"wayfire",@"hyprland"] containsObject:desktopChoice]&&[LRRuntimeBridge.defaultLinuxUser isEqual:@"root"]){
         [self desktopStartFailed:@"Choose a Linux user" detail:@"Wayland desktops require a Linux user other than root. Close this screen, open Settings > Linux Users, then create or select your account and open the desktop again."];return;
     }
@@ -1468,6 +1483,7 @@ static NSString *LRSessionGraphicsMode(void){
     if([mode isEqual:@"custom"]&&_launchConfiguration[@"environment"][@"LINUXRUNNER_GLX"])
         glxMode=_launchConfiguration[@"environment"][@"LINUXRUNNER_GLX"];
     if(![@[@"off",@"software"] containsObject:glxMode]){[self message:@"LINUXRUNNER_GLX must be off or software. Software GLX is Mesa rendering, not Metal acceleration."];return;}
+    _audioUnavailable=NO;
     NSString *session=[@"session-" stringByAppendingString:NSUUID.UUID.UUIDString.lowercaseString];_sessionURL=[_supportURL URLByAppendingPathComponent:session isDirectory:YES];
     if(![NSFileManager.defaultManager createDirectoryAtURL:_sessionURL withIntermediateDirectories:NO attributes:@{NSFilePosixPermissions:@0700} error:&error]){[self message:error.localizedDescription];return;}
     uint8_t random[24];if(SecRandomCopyBytes(kSecRandomDefault,sizeof random,random)!=errSecSuccess){[self message:@"Cannot generate display authentication."];return;}
@@ -1521,8 +1537,10 @@ static NSString *LRSessionGraphicsMode(void){
 // session reported (audio=pulseaudio / unavailable) in session.log.
 - (NSDictionary *)audioSummary{
     if(!LRAudioBridge.enabled)return @{@"state":@"Off in Settings"};
-    NSString *log=_sessionURL?[NSString stringWithContentsOfURL:[_sessionURL URLByAppendingPathComponent:@"session.log"] encoding:NSUTF8StringEncoding error:nil]:nil;
-    if([log containsString:@"GUI_SESSION: audio=unavailable"])return @{@"state":@"Sound support not installed (Desktop › Install Desktop Support adds it)"};
+    NSString *availability=LRCachedDiagnosticTail([_sessionURL URLByAppendingPathComponent:@"audio-state"],64);
+    NSString *log=availability.length?nil:LRCachedDiagnosticTail([_sessionURL URLByAppendingPathComponent:@"session.log"],65536);
+    if([availability hasPrefix:@"unavailable"]||[log containsString:@"GUI_SESSION: audio=unavailable"])_audioUnavailable=YES;
+    if(_audioUnavailable)return @{@"state":@"Sound support not installed (Desktop Settings › Install / Repair Desktop Components adds it)"};
     return _audio?[_audio statistics]:@{@"state":@"No running session"};
 }
 // desktop-components.sh restarts a crashed panel or desktop surface a few times,
@@ -1536,17 +1554,21 @@ static NSString *DesktopDegradedNotice(NSString *state){
 }
 - (NSDictionary *)desktopSessionSummary {
     BOOL alive=_desktopMode&&_sessionTerminal.sessionPid>0;
+    BOOL stopping=alive&&[NSFileManager.defaultManager fileExistsAtPath:[_sessionURL URLByAppendingPathComponent:@"stop"].path];
     NSString *state=alive?@"Starting":@"Stopped";
-    NSString *readiness=alive?LRDiagnosticTailString(LRReadDiagnosticTail([_sessionURL URLByAppendingPathComponent:@"desktop-state"],8192)):@"";
+    NSString *readiness=alive?LRCachedDiagnosticTail([_sessionURL URLByAppendingPathComponent:@"desktop-state"],8192):@"";
     if(alive){
         if([readiness containsString:@"ready=1"])state=_desktopPainted?(DesktopDegradedNotice(readiness)?@"Ready (degraded)":@"Ready"):@"Components ready; waiting for paint";}
+    if(stopping)state=@"Stopping";
     NSString *environment=@"Not reported";
     for(NSString *line in [readiness componentsSeparatedByString:@"\n"])if([line hasPrefix:@"environment="])environment=[line substringFromIndex:12];
+    NSString *chosen=LRDiagnosticTailString(LRReadDiagnosticTail([_sessionURL URLByAppendingPathComponent:@"desktop-environment"],128));
+    NSString *fallbackNotice=alive&&chosen.length&&![environment isEqual:@"Not reported"]&&![chosen isEqual:environment]?[NSString stringWithFormat:@"The selected desktop (%@) could not start. The running desktop is %@. Open Desktop Logs for the cause.",chosen,environment]:@"";
     BOOL wayland=[environment isEqual:@"wayfire"]||[environment isEqual:@"hyprland"];
     NSString *server=alive?([environment isEqual:@"Not reported"]?@"Starting":(wayland?@"Wayland / Xwayland":@"X11 / Xvfb")):@"No running display";
-    NSString *transport=_client?([_client isKindOfClass:LRKMSClient.class]?@"Direct KMS":@"VNC"):@"Viewer detached";
-    NSString *geometry=_sessionURL?[NSString stringWithContentsOfURL:[_sessionURL URLByAppendingPathComponent:@"geometry"] encoding:NSUTF8StringEncoding error:nil]:nil;
-    return @{@"state":state,@"alive":@(alive),@"connected":@(_client!=nil),@"geometry":geometry?:@"",@"user":_sessionGuestUser?:@"unknown",@"selectedUser":LRRuntimeBridge.defaultLinuxUser,@"root":LRRuntimeBridge.activeRootName,@"audio":[self audioSummary],@"desktopEnvironment":environment,@"displayServer":server,@"transport":transport};
+    NSString *transport=_client?([_client isKindOfClass:LRKMSClient.class]?@"Direct Wayland":@"VNC"):@"Viewer detached";
+    NSString *geometry=_sessionURL?LRDiagnosticTailString(LRReadDiagnosticTail([_sessionURL URLByAppendingPathComponent:@"geometry"],128)):nil;
+    return @{@"state":state,@"alive":@(alive),@"stopping":@(stopping),@"connected":@(_client!=nil),@"geometry":geometry?:@"",@"user":_sessionGuestUser?:@"unknown",@"selectedUser":LRRuntimeBridge.defaultLinuxUser,@"root":LRRuntimeBridge.activeRootName,@"audio":[self audioSummary],@"desktopEnvironment":environment,@"fallbackNotice":fallbackNotice,@"displayServer":server,@"transport":transport};
 }
 // "Fit" desktop size: the window's shape in points (iPad windows, Stage Manager,
 // split view and external displays included), scaled up to at least 540 pixels
@@ -1576,7 +1598,7 @@ static NSString *DesktopDegradedNotice(NSString *state){
 // Linux desktop first (a second swipe still triggers the system gesture).
 - (BOOL)prefersHomeIndicatorAutoHidden{return _desktopMode;}
 - (UIRectEdge)preferredScreenEdgesDeferringSystemGestures{return _desktopMode?UIRectEdgeAll:UIRectEdgeNone;}
-- (void)stopDesktopSession{if(_desktopMode)[self stop];}
+- (void)stopDesktopSession{if(_desktopMode)[self performDesktopAction:@"stop"];}
 - (void)connectDesktopViewer{
     uint16_t port=[[NSString stringWithContentsOfURL:[_sessionURL URLByAppendingPathComponent:@"port"] encoding:NSUTF8StringEncoding error:nil] intValue];
     NSString *password=[NSString stringWithContentsOfURL:[_sessionURL URLByAppendingPathComponent:@"password"] encoding:NSUTF8StringEncoding error:nil];
@@ -1667,7 +1689,7 @@ static NSString *DesktopDegradedNotice(NSString *state){
 }
 - (void)updateStartupStatus{
     if(!_client)return;
-    NSString *state=[NSString stringWithContentsOfURL:[_sessionURL URLByAppendingPathComponent:@"window-state"] encoding:NSUTF8StringEncoding error:nil];
+    NSString *state=LRCachedDiagnosticTail([_sessionURL URLByAppendingPathComponent:@"window-state"],8192);
     BOOL mapped=NO;for(NSString *line in [state componentsSeparatedByString:@"\n"]){
         if([line hasPrefix:@"mapped="]){mapped=[[line substringFromIndex:7] integerValue]>0;break;}
     }
@@ -1677,7 +1699,7 @@ static NSString *DesktopDegradedNotice(NSString *state){
         [LRRuntimeBridge logCategory:@"X11_STARTUP" event:[NSString stringWithFormat:@"window_mapped=PASS elapsed=%.1fs first_paint=UNVERIFIED (mapping alone does not prove rendering)",elapsed]];
     }
     NSString *progress=mapped?@"Linux application window mapped":@"Waiting for Linux application window — keep this screen open";
-    if(_desktopMode){NSString *desktopState=[NSString stringWithContentsOfURL:[_sessionURL URLByAppendingPathComponent:@"desktop-state"] encoding:NSUTF8StringEncoding error:nil];progress=[desktopState containsString:@"ready=1"]&&_desktopPainted?(DesktopDegradedNotice(desktopState)?:@"Desktop ready"):@"Starting desktop components — keep this screen open";
+    if(_desktopMode){NSString *desktopState=LRCachedDiagnosticTail([_sessionURL URLByAppendingPathComponent:@"desktop-state"],8192);progress=[desktopState containsString:@"ready=1"]&&_desktopPainted?(DesktopDegradedNotice(desktopState)?:@"Desktop ready"):@"Starting desktop components — keep this screen open";
         if([desktopState containsString:@"ready=1"]&&_desktopPainted&&_startState==LRStartSession){_startState=LRStartIdle;[self hideStartPanel];[self desktopStartLog:@"stage=painted components=verified"];}
         if(DesktopDegradedNotice(desktopState))progress=DesktopDegradedNotice(desktopState);
         if([desktopState containsString:@"ready=1"]&&_queuedDesktopApplication){NSDictionary *app=_queuedDesktopApplication;_queuedDesktopApplication=nil;[self launchDesktopApplication:app];}}
@@ -1733,12 +1755,12 @@ static NSString *DesktopDegradedNotice(NSString *state){
     // A starting desktop has not yet given its session directory to the desktop
     // user, so publishing as that user failed with a permission error. Requests
     // are only served once the desktop is ready; hold it until then.
-    if(_desktopMode&&![[NSString stringWithContentsOfURL:[_sessionURL URLByAppendingPathComponent:@"desktop-state"] encoding:NSUTF8StringEncoding error:nil] containsString:@"ready=1"]){
+    if(_desktopMode&&![LRCachedDiagnosticTail([_sessionURL URLByAppendingPathComponent:@"desktop-state"],8192) containsString:@"ready=1"]){
         _queuedDesktopApplication=[config copy];[LRRuntimeBridge logCategory:@"DESKTOP" event:@"launch request held until the desktop is ready"];
         if(!_queuedLaunchTimer){__weak typeof(self) weak=self;_queuedLaunchTimer=[NSTimer scheduledTimerWithTimeInterval:1 repeats:YES block:^(NSTimer *timer){typeof(self) self=weak;
             if(!self||!self.sessionURL){[timer invalidate];return;}
             NSDictionary *held=self->_queuedDesktopApplication;if(!held){[timer invalidate];self.queuedLaunchTimer=nil;return;}
-            if([[NSString stringWithContentsOfURL:[self.sessionURL URLByAppendingPathComponent:@"desktop-state"] encoding:NSUTF8StringEncoding error:nil] containsString:@"ready=1"]){
+            if([LRCachedDiagnosticTail([self.sessionURL URLByAppendingPathComponent:@"desktop-state"],8192) containsString:@"ready=1"]){
                 [timer invalidate];self.queuedLaunchTimer=nil;self->_queuedDesktopApplication=nil;[self launchDesktopApplication:held];}}];}
         return;}
     NSString *selected=LRRuntimeBridge.defaultLinuxUser;
@@ -1787,6 +1809,9 @@ static NSString *DesktopDegradedNotice(NSString *state){
     state[@"screenModes"]=[[modes allObjects] sortedArrayUsingSelector:@selector(compare:)];
     state[@"statusDetail"]=_status.text?:@"";
     return state;
+}
+- (void)performDesktopActionAfterDismissing:(NSString *)action {
+    [self dismissViewControllerAnimated:YES completion:^{[self performDesktopAction:action];}];
 }
 - (void)performDesktopAction:(NSString *)action {
     if(!NSThread.isMainThread){__weak typeof(self) weak=self;dispatch_async(dispatch_get_main_queue(),^{[weak performDesktopAction:action];});return;}
@@ -1840,7 +1865,7 @@ static NSString *DesktopDegradedNotice(NSString *state){
     NSString *hint=_trackpadRequested?@"Waiting for external desktop output. You can cancel below.":nil;
     UIAlertController *menu=[UIAlertController alertControllerWithTitle:nil message:hint preferredStyle:UIAlertControllerStyleActionSheet];
     [menu addAction:[UIAlertAction actionWithTitle:@"Start / Reconnect Desktop" style:UIAlertActionStyleDefault handler:^(UIAlertAction *a){[self performDesktopAction:@"start"];}]];
-    [menu addAction:[UIAlertAction actionWithTitle:_surface.relativeTouchpad?@"Show Desktop on This Device":_trackpadRequested?@"Cancel Trackpad Connection":@"Use iPhone as Trackpad" style:UIAlertActionStyleDefault handler:^(UIAlertAction *a){[self performDesktopAction:@"touchpad"];}]];
+    [menu addAction:[UIAlertAction actionWithTitle:_surface.relativeTouchpad?@"Show Desktop on This Device":_trackpadRequested?@"Cancel Trackpad Connection":@"Use This Device as Touchpad" style:UIAlertActionStyleDefault handler:^(UIAlertAction *a){[self performDesktopAction:@"touchpad"];}]];
     for(NSArray *item in @[@[@"Wireless Display",@"wireless"],@[@"Paste Clipboard Text",@"clipboard"]]){
         UIAlertAction *action=[UIAlertAction actionWithTitle:item[0] style:UIAlertActionStyleDefault handler:^(UIAlertAction *a){[self performDesktopAction:item[1]];}];
         if([item[1] isEqual:@"clipboard"])action.enabled=_client&&_surface.pixelWidth&&_surface.pixelHeight;

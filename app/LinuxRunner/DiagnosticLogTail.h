@@ -26,3 +26,24 @@ static NSString *LRDiagnosticTailString(NSData *data) {
     }
     return nil;
 }
+
+// Polling UI reads the last snapshot. Disk access runs on a utility queue.
+static inline NSString *LRCachedDiagnosticTail(NSURL *url, NSUInteger limit) {
+    if (!url.isFileURL) return nil;
+    static NSCache *cache; static dispatch_once_t once;
+    dispatch_once(&once, ^{ cache=[NSCache new]; cache.countLimit=48; });
+    NSString *key=[NSString stringWithFormat:@"%@:%lu",url.path,(unsigned long)limit];
+    @synchronized(cache) {
+        NSMutableDictionary *entry=[cache objectForKey:key];
+        if(!entry){entry=[NSMutableDictionary new];[cache setObject:entry forKey:key];}
+        NSDate *updated=entry[@"updated"];
+        if(![entry[@"pending"] boolValue]&&(!updated||-[updated timeIntervalSinceNow]>=0.25)) {
+            entry[@"pending"]=@YES;
+            dispatch_async(dispatch_get_global_queue(QOS_CLASS_UTILITY,0), ^{
+                NSString *text=LRDiagnosticTailString(LRReadDiagnosticTail(url,limit))?:@"";
+                @synchronized(cache){entry[@"text"]=text;entry[@"updated"]=NSDate.date;entry[@"pending"]=@NO;}
+            });
+        }
+        return entry[@"text"];
+    }
+}

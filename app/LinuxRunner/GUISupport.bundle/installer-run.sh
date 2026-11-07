@@ -24,6 +24,10 @@ code=0
 # of the log, and every outcome ends with install-result for the app.
 if package_system_ready >> "$log" 2>&1; then
     /bin/sh "./$installer" "$@" >> "$log" 2>&1 || code=$?
+    if [ "$code" = 0 ]; then
+        # A request during the last stage must not start another stage or select a desktop.
+        /bin/sh -c '. ./support-common.sh; support_install_checkpoint' "$PWD/installer-run.sh" >> "$log" 2>&1 || code=$?
+    fi
 else
     code=$?
 fi
