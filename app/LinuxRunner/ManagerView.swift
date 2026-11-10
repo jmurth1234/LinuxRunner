@@ -516,7 +516,13 @@ struct ManagerView: View {
         .fullScreenCover(item: $graphical, onDismiss: {
             refreshDesktopSummary()
             if GraphicalRequest.desktopOwner === desktopLease { GraphicalRequest.desktopOwner = nil }
-        }) { request in NativeController(controller: presentedController(request)) }
+        }) { request in
+            if request.desktop {
+                NativeController(controller: presentedController(request)).ignoresSafeArea().statusBarHidden(true)
+            } else {
+                NativeController(controller: presentedController(request))
+            }
+        }
         .sheet(isPresented: $diagnostics) { DeveloperDiagnosticsView() }
         .sheet(isPresented: $desktopSettings, onDismiss: {
             guard let action = deferredDesktopAction else { return }
@@ -1879,14 +1885,32 @@ private struct DesktopLogsScreen: View {
 
 private struct DesktopPreferencesView: View {
     @State private var resolution = 3
+    @State private var interfaceScale = "auto"
+    @State private var phoshKeyboard = "linux"
+    @State private var phoshKeyboardScale = "1.75"
     @AppStorage("LinuxRunnerDesktop.autoFullscreen") private var autoFullscreen = true
     @State private var metalPresentation = false
     @AppStorage("LinuxRunnerDesktop.directKMS") private var directKMS = false
     private var key: String { "LinuxRunnerDesktop.resolution." + LRRuntimeBridge.activeRootName() }
     var body: some View { Form {
         Section("Next Desktop Start") {
-            Picker("Resolution", selection: $resolution) { Text("640 × 480").tag(0); Text("800 × 600").tag(1); Text("1024 × 768").tag(2); Text("960 × 540 · Wide").tag(3); Text("Fit Screen").tag(4) }
-            Toggle("Immersive Landscape", isOn: $autoFullscreen)
+            Picker("Resolution", selection: $resolution) { Text("640 × 480").tag(0); Text("800 × 600").tag(1); Text("1024 × 768").tag(2); Text("960 × 540 · Wide").tag(3); Text("Fit Screen").tag(4); Text("Native Resolution").tag(5) }
+            Picker("Interface Scale", selection: $interfaceScale) {
+                Text("Automatic").tag("auto"); Text("100%").tag("1"); Text("200%").tag("2"); Text("300%").tag("3")
+            }
+            Text("Wayland only. Automatic uses the display scale at Native Resolution. Resolution and scale apply at the next desktop start. Larger displays use at most 8,388,608 pixels.").font(.caption)
+            if UserDefaults.standard.string(forKey: "LinuxRunnerDesktop.environment." + LRRuntimeBridge.activeRootName()) == "phosh" {
+                Picker("Phosh Keyboard", selection: $phoshKeyboard) {
+                    Text("iOS Keyboard").tag("ios"); Text("Linux Keyboard").tag("linux")
+                }.accessibilityIdentifier("Phosh keyboard")
+                if phoshKeyboard == "linux" {
+                    Picker("Portrait Keyboard Height", selection: $phoshKeyboardScale) {
+                        Text("100%").tag("1"); Text("125%").tag("1.25"); Text("150%").tag("1.5"); Text("175%").tag("1.75"); Text("200%").tag("2")
+                    }
+                }
+            }
+            Toggle("Automatic Full Screen", isOn: $autoFullscreen)
+            Text("Native Resolution uses full screen in both orientations. Other resolutions use full screen in landscape. Use Show Desktop Controls to restore the controls.").font(.caption)
             Text("Applies after saving documents and stopping the current desktop. The existing session is not resized or interrupted.").font(.caption)
         }
         Section("Interaction") {
@@ -1895,14 +1919,24 @@ private struct DesktopPreferencesView: View {
         }
         Section("Desktop Transport") {
             Toggle("Direct Wayland Display · Experimental", isOn: $directKMS)
-            Text("Bypasses VNC for Hyprland and Wayfire with software or Metal GPU rendering. Applies at the next desktop start. Turn off and restart the desktop to return to the standard viewer connection.").font(.caption)
+            Text("Bypasses VNC for Phosh, Hyprland and Wayfire with software or Metal GPU rendering. Applies at the next desktop start. Turn off and restart the desktop to return to the standard viewer connection.").font(.caption)
         }
         Section("Framebuffer Presentation") {
             Toggle("Metal Presentation · Experimental", isOn: $metalPresentation)
             Text("Applies when reopening the viewer. Presents received display updates through Metal, with Core Graphics fallback. Enabled by default for SteamOS on iPad when the Linux Metal GPU is active. The Linux GPU and execution engine are selected separately in Settings › Graphics.").font(.caption)
         }
         Section("Execution") { Text("ARM64 interpreter; JIT is not required. The renderer for Linux applications is chosen in Settings › Graphics.").font(.caption) }
-    }.navigationTitle("Display & Gestures").onAppear { resolution = LRRuntimeBridge.desktopResolutionIndex(); metalPresentation = LRRuntimeBridge.desktopMetalPresentationEnabled() }.onChange(of: resolution) { UserDefaults.standard.set($0, forKey: key) }.onChange(of: metalPresentation) { UserDefaults.standard.set($0, forKey: "LinuxRunnerDesktop.metalPresentation") } }
+    }.navigationTitle("Display & Gestures").onAppear {
+        resolution = LRRuntimeBridge.desktopResolutionIndex()
+        metalPresentation = LRRuntimeBridge.desktopMetalPresentationEnabled()
+        interfaceScale = UserDefaults.standard.string(forKey: "LinuxRunnerDesktop.scale." + LRRuntimeBridge.activeRootName()) ?? "auto"
+        phoshKeyboardScale = UserDefaults.standard.string(forKey: "LinuxRunnerDesktop.phoshKeyboardScale." + LRRuntimeBridge.activeRootName()) ?? "1.75"
+        phoshKeyboard = UserDefaults.standard.string(forKey: "LinuxRunnerDesktop.phoshKeyboard." + LRRuntimeBridge.activeRootName()) ?? "linux"
+    }.onChange(of: resolution) { UserDefaults.standard.set($0, forKey: key) }
+     .onChange(of: metalPresentation) { UserDefaults.standard.set($0, forKey: "LinuxRunnerDesktop.metalPresentation") }
+     .onChange(of: interfaceScale) { UserDefaults.standard.set($0, forKey: "LinuxRunnerDesktop.scale." + LRRuntimeBridge.activeRootName()) }
+     .onChange(of: phoshKeyboardScale) { UserDefaults.standard.set($0, forKey: "LinuxRunnerDesktop.phoshKeyboardScale." + LRRuntimeBridge.activeRootName()) }
+     .onChange(of: phoshKeyboard) { UserDefaults.standard.set($0, forKey: "LinuxRunnerDesktop.phoshKeyboard." + LRRuntimeBridge.activeRootName()) } }
 }
 /// Graphics renderer for Linux applications, plus live evidence of what actually ran on the GPU.
 // Folders the user picks in Files (iPhone, iCloud Drive, other providers or an
@@ -2226,7 +2260,7 @@ private struct SharedFoldersView: View {
 }
 
 enum DesktopChoice: String, CaseIterable, Identifiable {
-    case linuxrunner, lxqt, enlightenment, wayfire, hyprland, plasma, xfce
+    case linuxrunner, lxqt, enlightenment, wayfire, hyprland, plasma, xfce, phosh
     var id: String { rawValue }
     var title: String {
         switch self {
@@ -2234,18 +2268,20 @@ enum DesktopChoice: String, CaseIterable, Identifiable {
         case .xfce: return "Xfce"
         case .lxqt: return "LXQt"
         case .enlightenment: return "Enlightenment"
+        case .phosh: return "Phosh · Experimental"
         case .wayfire: return "Wayfire"
         case .hyprland: return "Hyprland · Experimental"
         case .plasma: return "KDE Plasma · Experimental"
         }
     }
-    var isWayland: Bool { self == .wayfire || self == .hyprland }
+    var isWayland: Bool { self == .wayfire || self == .hyprland || self == .phosh }
     var detail: String {
         switch self {
         case .linuxrunner: return "X11 desktop with Openbox, a panel and a file manager."
         case .xfce: return DesktopCatalog.option(rawValue).detail
         case .lxqt: return "X11 desktop with LXQt, Openbox, PCManFM-Qt and QTerminal."
         case .enlightenment: return "X11 desktop with the Enlightenment shelf and Terminology terminal."
+        case .phosh: return "Mobile Wayland desktop with Phoc, an app grid and a screen keyboard. Available on Debian. Use Native Resolution and Interface Scale for phone screens."
         case .wayfire: return "Wayland desktop with wf-shell and foot. The compositor uses Metal GPU rendering when available, or software rendering."
         case .hyprland: return "Wayland desktop with tiling windows, Waybar and foot. The compositor uses Metal GPU rendering when available. Software rendering disables blur, shadows and animations."
         case .plasma: return "Experimental Plasma desktop. Debian uses X11. Arch and Fedora use Wayland. It needs more memory than LinuxRunner Desktop."
@@ -2258,6 +2294,7 @@ enum DesktopChoice: String, CaseIterable, Identifiable {
         case .xfce: return LRRuntimeBridge.xfceInstalled()
         case .lxqt: return LRRuntimeBridge.lxqtInstalled()
         case .enlightenment: return LRRuntimeBridge.enlightenmentInstalled()
+        case .phosh: return LRRuntimeBridge.phoshInstalled()
         case .wayfire: return LRRuntimeBridge.wayfireInstalled()
         case .hyprland: return LRRuntimeBridge.hyprlandInstalled()
         case .plasma: return LRRuntimeBridge.plasmaInstalled()
@@ -2269,6 +2306,7 @@ enum DesktopChoice: String, CaseIterable, Identifiable {
         case .xfce: LRRuntimeBridge.installXfce(progress, completion: completion)
         case .lxqt: LRRuntimeBridge.installLXQt(progress, completion: completion)
         case .enlightenment: LRRuntimeBridge.installEnlightenment(progress, completion: completion)
+        case .phosh: LRRuntimeBridge.installPhosh(progress, completion: completion)
         case .wayfire: LRRuntimeBridge.installWayfire(progress, completion: completion)
         case .hyprland: LRRuntimeBridge.installHyprland(progress, completion: completion)
         case .plasma: LRRuntimeBridge.installPlasma(progress, completion: completion)

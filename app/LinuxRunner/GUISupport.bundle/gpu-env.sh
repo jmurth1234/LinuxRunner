@@ -49,3 +49,8 @@ lr_gpu_route() {
     export LR_GUI_GPU_ACTIVE=$lr_mode
     echo "GPU_ROUTING: requested=$lr_mode active=$lr_mode provider=$lr_provider stats=${LR_MESA_METAL_STATS_DIR:-none}"
 }
+
+# KMS compositors use their own renderer. Keep the GLX application bridge out of them.
+lr_desktop_gpu_mode() {
+    case "$1" in wayfire|hyprland|phosh) printf '%s\n' mesa;; *) printf '%s\n' "$2";; esac
+}

@@ -4,6 +4,17 @@
 #include <stdbool.h>
 #include <math.h>
 #include <stdint.h>
+#include "../../fs/display_geometry.h"
+// Preserve native pixels within the shared frame memory limit.
+static inline void lr_native_desktop_geometry(double w, double h, uint16_t *width, uint16_t *height) {
+    if (!isfinite(w) || !isfinite(h) || w < 320 || h < 240) {
+        *width = 960; *height = 540; return;
+    }
+    double scale = fmin(1, fmin(LR_DISPLAY_MAX_AXIS / w, LR_DISPLAY_MAX_AXIS / h));
+    scale = fmin(scale, sqrt(LR_DISPLAY_MAX_PIXELS / w / h));
+    *width = fmax(320, floor(w * scale / 2) * 2);
+    *height = fmax(240, floor(h * scale / 2) * 2);
+}
 static inline bool lr_external_output(bool enabled, bool connected) { return enabled && connected; }
 static inline bool lr_keep_desktop_transport(bool viewer_visible, bool enabled, bool connected) {
     return viewer_visible || lr_external_output(enabled, connected);
@@ -67,7 +78,7 @@ static inline void lr_display_update_rate(double now, uint64_t frames,
 static inline unsigned lr_desktop_resolution(int saved, bool steamos_ipad, bool migrated) {
     if (saved < 0) return steamos_ipad ? 4 : 3;
     if (steamos_ipad && !migrated && saved == 3) return 4;
-    return saved > 4 ? 4 : (unsigned)saved;
+    return saved > 5 ? 5 : (unsigned)saved;
 }
 // The guest desktop is landscape, independently of the native window's
 // orientation (including portrait monitors and narrow iPad windows). Rotation

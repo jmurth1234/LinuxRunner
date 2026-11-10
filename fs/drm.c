@@ -345,12 +345,12 @@ static void kms_init(void) {
     lock_init(&kms.lock);
     unsigned w = 0, h = 0;
     const char *mode = getenv("ISH_SOFTWARE_DRM_MODE");
-    if (!mode || sscanf(mode, "%ux%u", &w, &h) != 2 || w < 320 || h < 240 || w > 4096 || h > 4096) { w = 1280; h = 720; }
+    if (!mode || sscanf(mode, "%ux%u", &w, &h) != 2 || w < 320 || h < 240 || !lr_display_dimensions(w, h)) { w = 1280; h = 720; }
     kms_set_modes(w, h);
 }
 // The app sets each desktop session's size before the compositor starts.
 void drm_set_display_size(unsigned width, unsigned height) {
-    if (width < 320 || height < 240 || width > 4096 || height > 4096) return;
+    if (width < 320 || height < 240 || !lr_display_dimensions(width, height)) return;
     pthread_once(&kms_once, kms_init);
     lock(&kms.lock);
     kms_set_modes(width, height);

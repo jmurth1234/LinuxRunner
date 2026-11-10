@@ -79,7 +79,7 @@
     },
     {
       "name": "desktop-components.sh",
-      "sha256": "49ec1df76d856927a0314bca34445e2378e2ea2420e2c77ce7d8e26defd9e6c4",
+      "sha256": "1ba0e0f21665acce37699173b7e8a7f2dd536002a940d4f3202472b05c35b97d",
       "mode": "0755"
     },
     {
@@ -119,7 +119,7 @@
     },
     {
       "name": "desktop-profile.sh",
-      "sha256": "69b0cd508014ea01346a7ca52d1626eca8278ca81493f899766dc611e71648bf",
+      "sha256": "085aadb1a1004789ee470912821c8e73764c77a4a0a26922e45e0081ee414aee",
       "mode": "0755"
     },
     {
@@ -209,7 +209,7 @@
     },
     {
       "name": "gpu-env.sh",
-      "sha256": "703a32470147a6a8e5a7ca586696d15460f1218bfb948ad4e5f1a17ffa67bb7d",
+      "sha256": "51149f07c029d0a430b4840e9fd639309bc368a3f8567ec86f1ee1bc211d8e6d",
       "mode": "0755"
     },
     {
@@ -379,7 +379,7 @@
     },
     {
       "name": "installer-run.sh",
-      "sha256": "38130de865f05ec35bfa1a6ec028afcfa14b6add01e82ed0d3771d7703209e99",
+      "sha256": "09247dbf790ff9163c25bc0f607062b5930c4d9973d6efed7315010d8b0c4664",
       "mode": "0755"
     },
     {
@@ -468,6 +468,11 @@
       "mode": "0755"
     },
     {
+      "name": "phosh-session.sh",
+      "sha256": "be6a6b0a9bf81d2d576bc033cab0b0bcc8b4786d51a866fd5ea74f98e5fcbff9",
+      "mode": "0755"
+    },
+    {
       "name": "plasma-bridge-notices.txt",
       "sha256": "076a9794529de20016e33b0deac4c372109e512362e23b80356ecf0ef8952dd3",
       "mode": "0644"
@@ -504,7 +509,7 @@
     },
     {
       "name": "session.sh",
-      "sha256": "246a22e2a0dd360ada1c8dd05c3d1e34002e2ddafbb4ee3b62d8c0ad3b59a47c",
+      "sha256": "e60783ad2d0e2ac043ef4be5c3d940d54e2f506e5eca4d1ec6eaa603feb40067",
       "mode": "0755"
     },
     {

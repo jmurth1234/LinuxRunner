@@ -58,3 +58,17 @@ Set `LR_WAYLAND_TEST_DESKTOP=hyprland` and select a prepared Arch root to use th
 `testNormalWayfireStartup` checks the normal launch path with a prepared Wayfire environment and root selected as its Linux user. It requires an immediate prompt to select a normal Linux user.
 
 `testRemoveEnvironment` requires a disposable environment. Set `LR_REMOVE_TEST_NAME` to its displayed name. The test cancels removal, then confirms removal. It deletes that environment. Keep at least one other environment installed. The native `environment-removal-contract` simulator workflow also checks failed staging, active environment protection, preference cleanup and external folder preservation.
+
+## Phosh mobile test
+
+Install the Phosh profile in a disposable Debian environment. Select a normal Linux user. Phosh uses Phoc, the KMS bridge and the existing session D-Bus. The iOS runtime does not run a systemd user session.
+
+Set `LR_WAYLAND_TEST_DESKTOP=phosh`, `LR_WAYFIRE_TEST_ROOT` and `LR_WAYFIRE_TEST_USER` in the test runner. Run `LinuxRunnerUITests/testPhoshSimulatorMobile`. The test selects Native Resolution, requires rendered app search text, opens the iOS keyboard, rotates the viewer and reconnects the viewer. Keep the screenshot evidence. Process readiness alone does not prove rendering.
+
+Native Resolution uses the output screen's pixel size and its orientation at session start. Automatic Interface Scale uses the screen scale. Rotation fits the current desktop into the viewer. Restart the desktop to select a new output orientation. The frame limit is 4096 pixels per axis and 8,388,608 pixels in total. Fit Screen keeps its lower software rendering limit.
+
+Select iOS Keyboard or Linux Keyboard in Display & Gestures before starting Phosh. Linux Keyboard starts Squeekboard. The iOS keyboard remains available through the desktop controls. Test Squeekboard separately when this option is selected. Simulator results do not verify physical-device memory use or Metal performance.
+
+The host probe `tests/linuxrunner/gui/phosh_mobile_probe.m` checks rendered app search and pointer and key input through RFB. Build it with the Foundation, Security, Vision, ImageIO and CoreGraphics frameworks. Run it with `run_guest_session.py --desktop-environment phosh --geometry 1206x2622 --output-scale 3` and set `ISH_SOFTWARE_DRM=1` and `ISH_SOFTWARE_DRM_MODE=1206x2622`. Add `--phosh-keyboard linux` to check Squeekboard. The probe saves the frame, recognized text and a JSON result. This checks the Linux session and viewer protocol, not UIKit.
+
+Phosh uses Pixman with the software KMS device. Metal uses the GLES renderer. Phoc animations stay off. The session starts Phosh with `--unlocked`; iOS manages device locking. The first start sets the wallpaper, shows installed applications and turns Linux idle locking off. Later starts keep the account settings.

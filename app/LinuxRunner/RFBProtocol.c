@@ -1,7 +1,7 @@
 #include "RFBProtocol.h"
 #include <string.h>
 bool lr_rfb_dimensions(uint16_t w,uint16_t h,size_t *bytes) {
-    if(!w||!h||w>LR_RFB_MAX_WIDTH||h>LR_RFB_MAX_HEIGHT||!bytes)return false;
+    if(!lr_display_dimensions(w,h)||!bytes)return false;
     *bytes=(size_t)w*h*4;return true;
 }
 bool lr_rfb_rectangle(uint16_t fw,uint16_t fh,uint16_t x,uint16_t y,uint16_t w,uint16_t h,size_t *bytes) {

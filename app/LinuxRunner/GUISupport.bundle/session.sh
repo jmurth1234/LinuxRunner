@@ -21,7 +21,7 @@ guest_user=root
 [ ! -f "$session/guest-user" ] || guest_user=$(cat "$session/guest-user")
 case "$guest_user" in ''|*[!a-z0-9_-]*|[0-9-]*) echo 'GUI_SESSION: invalid guest account'; exit 2;; esac
 case "$mode:$(cat "$session/desktop-environment" 2>/dev/null || echo linuxrunner)" in
-    desktop:wayfire|desktop:hyprland)
+    desktop:wayfire|desktop:hyprland|desktop:phosh)
         [ "$guest_user" != root ] || { echo 'GUI_SESSION: Wayland desktops require a non-root Linux user; select one in Settings > Linux Users'; exit 10; };;
 esac
 # Terminal login shells find the running desktop through this root-owned
@@ -69,7 +69,7 @@ if [ "$(id -u)" = 0 ] && [ "$guest_user" != root ]; then
             rm -f /dev/dri/card1 /dev/dri/renderD129
             echo 'GUI_SESSION: SteamOS gpu=software (GPU device or overlay unavailable)'
         fi
-    elif [ "$mode" = desktop ] && { [ "$kms_desktop" = hyprland ] || [ "$kms_desktop" = wayfire ]; } && command -v seatd >/dev/null; then
+    elif [ "$mode" = desktop ] && { [ "$kms_desktop" = hyprland ] || [ "$kms_desktop" = wayfire ] || [ "$kms_desktop" = phosh ]; } && command -v seatd >/dev/null; then
         mkdir -p /dev/dri /run/udev/data
         [ -c /dev/dri/card0 ] || mknod -m 660 /dev/dri/card0 c 226 0
         [ -c /dev/dri/renderD128 ] || mknod -m 666 /dev/dri/renderD128 c 226 128
@@ -217,7 +217,7 @@ case "$display_transport" in
   [ "$mode" = desktop ] || exit 2
   case "$(cat "$session/desktop-environment")" in
    hyprland) [ -c /dev/dri/card0 ] || { echo 'GUI_SESSION: direct display requires KMS; disable Direct Wayland Display'; exit 2; };;
-   wayfire) { [ -c /dev/dri/card1 ] || [ -c /dev/dri/card0 ]; } && [ -S /run/seatd.sock ] || { echo 'GUI_SESSION: direct Wayfire requires KMS and seatd; disable Direct Wayland Display'; exit 2; };;
+   wayfire|phosh) { [ -c /dev/dri/card1 ] || [ -c /dev/dri/card0 ]; } && [ -S /run/seatd.sock ] || { echo 'GUI_SESSION: direct Wayland display requires KMS and seatd; disable Direct Wayland Display'; exit 2; };;
    *) exit 2;;
   esac;;
  *) exit 2;;
@@ -251,7 +251,7 @@ export LR_GUI_GPU_MODE="$gpu_mode" LR_GUI_SESSION_DIR="$session"
 # Desktop environment chosen in Settings › Desktop (desktop mode): linuxrunner or plasma (experimental).
 desktop_environment=linuxrunner
 [ ! -f "$session/desktop-environment" ] || desktop_environment=$(cat "$session/desktop-environment")
-case "$desktop_environment" in linuxrunner|plasma|lxqt|enlightenment|wayfire|hyprland|xfce) ;; *) desktop_environment=linuxrunner;; esac
+case "$desktop_environment" in linuxrunner|plasma|lxqt|enlightenment|wayfire|hyprland|xfce|phosh) ;; *) desktop_environment=linuxrunner;; esac
 export LR_DESKTOP_ENVIRONMENT="$desktop_environment"
 steamos_gpu=0
 if [ "$distro" = steamos ] && [ "$mode" = desktop ] && [ "$desktop_environment" = plasma ] &&
@@ -291,7 +291,7 @@ if [ "$shm_mode" = sysv ]; then
 fi
 echo "GUI_CAPTURE: shared-images=$shm_mode"
 # The RFB KMS bridge uses MIT-SHM. Capture keeps its selected mode.
-[ "$mode" != desktop ] || [ "$desktop_environment" != wayfire ] || shm_switch=+extension
+[ "$mode" != desktop ] || { [ "$desktop_environment" != wayfire ] && [ "$desktop_environment" != phosh ]; } || shm_switch=+extension
 export XDG_SESSION_TYPE=x11
 # A login profile can restore the previous compositor socket.
 unset WAYLAND_DISPLAY
@@ -314,10 +314,10 @@ steamos_software_fallback() {
 width=640 height=480
 if [ -f "$session/geometry" ]; then
     geometry=$(cat "$session/geometry")
-    # A preset or the app's "Fit Screen" size: even WxH within 320x240..2560x1600.
+    # Accept even dimensions with at most 8,388,608 pixels.
     case "$geometry" in ''|*[!0-9x]*|x*|*x|*x*x*) echo 'GUI_SESSION: invalid display geometry'; exit 2;; esac
     width=${geometry%x*};height=${geometry#*x}
-    if [ "$width" -lt 320 ] || [ "$width" -gt 2560 ] || [ "$height" -lt 240 ] || [ "$height" -gt 1600 ] || [ $((width % 2)) -ne 0 ] || [ $((height % 2)) -ne 0 ]; then echo 'GUI_SESSION: invalid display geometry'; exit 2; fi
+    if [ "$width" -lt 320 ] || [ "$width" -gt 4096 ] || [ "$height" -lt 240 ] || [ "$height" -gt 4096 ] || [ $((width * height)) -gt 8388608 ] || [ $((width % 2)) -ne 0 ] || [ $((height % 2)) -ne 0 ]; then echo 'GUI_SESSION: invalid display geometry'; exit 2; fi
 fi
 if [ "$steamos_gpu" = 1 ] && ! /opt/linuxrunner/steamos-gpu/bin/graphics-check > "$session/graphics.log" 2>&1; then
     steamos_software_fallback
@@ -473,7 +473,7 @@ vnc_lifetime="-once -timeout 60"
 vnc_cursor_option=
 case "$mode:$(cat "$session/desktop-environment" 2>/dev/null)" in
     desktop:hyprland) if command -v Hyprland >/dev/null && [ -c /dev/dri/card0 ]; then vnc_cursor_option=-nocursor; fi;;
-    desktop:wayfire) if [ -c /dev/dri/card0 ] && command -v wayfire >/dev/null; then vnc_cursor_option=-nocursor; fi;;
+    desktop:wayfire|desktop:phosh) if [ -c /dev/dri/card0 ] && command -v wayfire >/dev/null; then vnc_cursor_option=-nocursor; fi;;
 esac
 [ -z "$vnc_cursor_option" ] || echo 'GUI_SESSION: pointer=compositor (x11vnc draws none)'
 if [ "$display_transport" = rfb ]; then
@@ -508,8 +508,7 @@ elif [ "$mode" = desktop ]; then
     # Wayland compositors use KMS directly. The application bridge requires GLX.
     # Keep the selected application mode for later launch.sh requests.
     ( . ./gpu-env.sh
-      compositor_gpu_mode=$LR_GUI_GPU_MODE
-      case "$desktop_environment" in wayfire|hyprland) compositor_gpu_mode=mesa;; esac
+      compositor_gpu_mode=$(lr_desktop_gpu_mode "$desktop_environment" "$LR_GUI_GPU_MODE")
       lr_gpu_route "$compositor_gpu_mode" "$PWD" "$session/gpu-stats"
       exec $setsid_cmd /bin/sh -c 'echo $$ > "$1/application-group"; exec /bin/sh ./desktop-components.sh "$1"' sh "$session" ) > "$session/application.log" 2>&1 &
 else

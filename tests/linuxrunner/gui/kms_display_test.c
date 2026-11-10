@@ -24,7 +24,7 @@ int main(void) {
     assert(p[0] == 0xff112233 && p[1] == 0xff445566 && p[2] == 0xff778899 && p[3] == 0xffaabbcc);
     free(f.pixels);
     lr_kms_display_publish(padded, 2, 2, 4); // invalid pitch
-    lr_kms_display_publish(padded, 4096, 2, 16384); // viewer limit
+    lr_kms_display_publish(padded, 4097, 2, 16388); // viewer limit
     assert(!lr_kms_display_take(a, &f));
     lr_kms_display_publish(padded, 2, 2, 12);
     padded[0] = 7; lr_kms_display_publish(padded, 2, 2, 12);
@@ -47,6 +47,15 @@ int main(void) {
     assert(!lr_kms_display_input(a, (struct lr_kms_input){.type=1}));
     assert(!lr_kms_display_take(a, &f));
     assert(lr_kms_display_pop(&e) && e.type==3 && !lr_kms_display_pop(&e));
+    uint32_t *portrait = calloc((size_t)1206 * 2622, 4);
+    assert(portrait); portrait[(size_t)1206 * 2622 - 1] = 0x123456;
+    lr_kms_display_publish(portrait, 1206, 2622, 1206 * 4);
+    free(portrait);
+    assert(lr_kms_display_take(b, &f) && f.width == 1206 && f.height == 2622);
+    assert(((uint32_t *)f.pixels)[(size_t)1206 * 2622 - 1] == 0xff123456);
+    free(f.pixels);
+    lr_kms_display_publish(padded, 4096, 4096, 4096 * 4);
+    assert(!lr_kms_display_take(b, &f));
     pthread_t thread; assert(!pthread_create(&thread, NULL, produce, NULL));
     for (unsigned i=0; i<1000; i++) if(lr_kms_display_take(b,&f)) free(f.pixels);
     pthread_join(thread,NULL);

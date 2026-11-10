@@ -390,6 +390,7 @@ struct DesktopOption: Identifiable {
 enum DesktopCatalog {
     static let options: [DesktopOption] = [
         DesktopOption(id: "linuxrunner", title: "LinuxRunner Desktop", detail: "Openbox with a panel and file manager. Fastest start and lowest memory use; best for first-time Linux users.", experimental: false, lightweight: true),
+        DesktopOption(id: "phosh", title: "Phosh", detail: "Mobile Wayland desktop with an app grid and a screen keyboard.", experimental: true, lightweight: false),
         DesktopOption(id: "xfce", title: "Xfce", detail: "On Kali: Kali's own desktop (kali-desktop-xfce) with the Kali menu, themes and wallpaper.", experimental: false, lightweight: false),
         DesktopOption(id: "lxqt", title: "LXQt", detail: "A light, traditional Qt desktop with a start menu, panel and file manager.", experimental: false, lightweight: true),
         DesktopOption(id: "wayfire", title: "Wayfire", detail: "A Wayland compositor with a panel and dock, running in the X display.", experimental: false, lightweight: false),
@@ -411,6 +412,8 @@ enum DesktopCatalog {
     static func unavailableReason(_ id: String, _ d: String) -> String? {
         switch (id, d) {
         case ("linuxrunner", _): return nil
+        case ("phosh", "debian"): return nil
+        case ("phosh", _): return "Phosh needs Debian."
         case ("xfce", "kali"): return nil
         case ("xfce", _): return "Offered on Kali Linux, where it is Kali's own desktop; not yet tested on this distribution."
         case (_, "kali") where id != "linuxrunner": return "Kali's desktop is Xfce; other desktops are not yet tested on Kali."
@@ -431,6 +434,7 @@ enum DesktopCatalog {
     }
     static func isInstalled(_ id: String) -> Bool {
         switch id {
+        case "phosh": return LRRuntimeBridge.phoshInstalled()
         case "xfce": return LRRuntimeBridge.xfceInstalled()
         case "lxqt": return LRRuntimeBridge.lxqtInstalled()
         case "enlightenment": return LRRuntimeBridge.enlightenmentInstalled()
@@ -442,6 +446,7 @@ enum DesktopCatalog {
     }
     static func installer(_ id: String) -> ((@escaping (String) -> Void, @escaping (Error?) -> Void) -> Void)? {
         switch id {
+        case "phosh": return { LRRuntimeBridge.installPhosh($0, completion: $1) }
         case "xfce": return { LRRuntimeBridge.installXfce($0, completion: $1) }
         case "lxqt": return { LRRuntimeBridge.installLXQt($0, completion: $1) }
         case "enlightenment": return { LRRuntimeBridge.installEnlightenment($0, completion: $1) }

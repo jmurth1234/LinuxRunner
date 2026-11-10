@@ -558,7 +558,7 @@ static NSString *LRThermalState(void) {
         completion(error); return;
     }
     NSUserDefaults *defaults = NSUserDefaults.standardUserDefaults;
-    for (NSString *prefix in @[@"LinuxRunnerDefaultUser.",@"LinuxRunnerDesktop.environment.",@"LinuxRunnerDesktop.resolution."])
+    for (NSString *prefix in @[@"LinuxRunnerDefaultUser.",@"LinuxRunnerDesktop.environment.",@"LinuxRunnerDesktop.resolution.",@"LinuxRunnerDesktop.scale.",@"LinuxRunnerDesktop.phoshKeyboard.",@"LinuxRunnerDesktop.phoshKeyboardScale."])
         [defaults removeObjectForKey:[prefix stringByAppendingString:root]];
     if ([[defaults stringForKey:@"LinuxRunnerSetup.root"] isEqual:root]) {
         [defaults removeObjectForKey:@"LinuxRunnerSetup.root"];
@@ -1557,8 +1557,19 @@ static void LRWaitForProcess(TerminalViewController *process, NSTimeInterval tim
     for (NSString *path in @[@"/usr/bin/Hyprland", @"/usr/bin/waybar", @"/usr/bin/fuzzel", @"/usr/bin/seatd"]) if (!LRReadGuestFile(path, 4).length) return NO;
     return YES;
 }
++ (void)installPhosh:(void (^)(NSString *stage))progress completion:(void (^)(NSError * _Nullable error))completion {
+    [self runDesktopProfile:@"phosh" progress:progress completion:completion];
+}
++ (BOOL)phoshInstalled {
+    for (NSString *path in @[@"/usr/share/glib-2.0/schemas/org.gnome.settings-daemon.peripherals.gschema.xml", @"/usr/bin/phoc", @"/usr/libexec/phosh", @"/usr/bin/squeekboard", @"/usr/bin/seatd", @"/usr/bin/foot"])
+        if (!LRReadGuestFile(path, 4).length) return NO;
+    return YES;
+}
 + (void)runDesktopProfile:(NSString *)mode progress:(void (^)(NSString *stage))progress completion:(void (^)(NSError * _Nullable error))completion {
-    NSString *title = [mode isEqual:@"plasma"] ? @"Installing KDE Plasma" : [mode isEqual:@"lxqt"] ? @"Installing LXQt" : [mode isEqual:@"enlightenment"] ? @"Installing Enlightenment" : [mode isEqual:@"wayfire"] ? @"Installing Wayfire" : [mode isEqual:@"hyprland"] ? @"Installing Hyprland" : @"Installing Desktop Components";
+    NSDictionary *titles = @{@"plasma": @"Installing KDE Plasma", @"lxqt": @"Installing LXQt",
+        @"enlightenment": @"Installing Enlightenment", @"wayfire": @"Installing Wayfire",
+        @"hyprland": @"Installing Hyprland", @"phosh": @"Installing Phosh"};
+    NSString *title = titles[mode] ?: @"Installing Desktop Components";
     [self runSupportInstall:@[mode] title:title progress:progress completion:completion];
 }
 

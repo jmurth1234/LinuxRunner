@@ -17,7 +17,7 @@ lr_stage() { lr_now=$(lr_ms); echo "DESKTOP_STARTUP: stage=$1 at_ms=$((lr_now - 
 # desktop starts instead, so Open Desktop keeps working.
 environment=${LR_DESKTOP_ENVIRONMENT:-}
 [ -n "$environment" ] && [ "$environment" != linuxrunner ] || environment=$(cat "${XDG_CONFIG_HOME:-$HOME/.config}/linuxrunner/desktop-environment" 2>/dev/null || echo linuxrunner)
-case "$environment" in plasma|lxqt|enlightenment|wayfire|hyprland|xfce) ;; *) environment=linuxrunner;; esac
+case "$environment" in plasma|lxqt|enlightenment|wayfire|hyprland|xfce|phosh) ;; *) environment=linuxrunner;; esac
 if [ "$environment" = xfce ] && ! command -v startxfce4 >/dev/null; then echo 'DESKTOP_STARTUP: xfce=not-installed; starting the LinuxRunner desktop (Settings › Desktop Environment › Install Xfce)'; environment=linuxrunner; fi
 if [ "$environment" = lxqt ] && ! command -v startlxqt >/dev/null; then echo 'DESKTOP_STARTUP: lxqt=not-installed; starting the LinuxRunner desktop (Settings › Desktop Environment › Install LXQt)'; environment=linuxrunner; fi
 if [ "$environment" = enlightenment ] && ! command -v enlightenment_start >/dev/null; then echo 'DESKTOP_STARTUP: enlightenment=not-installed; starting the LinuxRunner desktop (Settings › Desktop Environment › Install Enlightenment)'; environment=linuxrunner; fi
@@ -25,6 +25,7 @@ if [ "$environment" = wayfire ] && ! command -v wayfire >/dev/null; then echo 'D
 if [ "$environment" = hyprland ] && { ! command -v Hyprland >/dev/null || ! [ -c /dev/dri/card0 ]; }; then echo 'DESKTOP_STARTUP: hyprland=unavailable (not installed or no software KMS device); starting the LinuxRunner desktop'; environment=linuxrunner; fi
 if [ "$environment" = enlightenment ] && [ "$(sed -n 's/^ID=//p' /etc/os-release 2>/dev/null | tr -d '"')" = debian ]; then echo 'DESKTOP_STARTUP: enlightenment=not-available-on-debian (stops at its splash screen); starting the LinuxRunner desktop'; environment=linuxrunner; fi
 if [ "$environment" = plasma ] && ! command -v startplasma-x11 >/dev/null; then echo 'DESKTOP_STARTUP: plasma=not-installed; starting the LinuxRunner desktop (Settings › Desktop Environment › Install KDE Plasma)'; environment=linuxrunner; fi
+if [ "$environment" = phosh ] && { [ ! -x /usr/libexec/phosh ] || ! command -v phoc >/dev/null; }; then echo 'DESKTOP_STARTUP: phosh=not-installed; install Phosh in Settings'; exit 127; fi
 [ -x ./desktop-probe ] || { echo 'DESKTOP_STARTUP: missing=desktop-probe; run Install Desktop Support'; exit 127; }
 wm= panel= surface= conf= limit=120 integrated=0
 qt_desktop=0
@@ -42,7 +43,7 @@ if [ "$qt_desktop" = 1 ]; then
 fi
 fi
 export XDG_DATA_DIRS="$base/share:${XDG_DATA_DIRS:-/usr/local/share:/usr/share}"
-case "$environment" in wayfire|hyprland)
+case "$environment" in wayfire|hyprland|phosh)
     /bin/sh ./firefox-desktop.sh "$base/share/applications" || echo 'DESKTOP_STARTUP: Firefox menu compatibility entries could not be updated';;
 esac
 # Programs started from LinuxRunner open inside a Wayland compositor: its
@@ -50,7 +51,21 @@ esac
 publish_wayland() {
  /bin/sh ./publish-wayland-env.sh "$1"
 }
-component_name() { [ "$environment" != plasma ] || { echo "Plasma session (plasma.log)"; return; }; [ "$environment" != lxqt ] || { echo "LXQt session (lxqt.log)"; return; }; [ "$environment" != xfce ] || { echo "Xfce session (xfce.log)"; return; }; [ "$environment" != enlightenment ] || { echo "Enlightenment (enlightenment.log)"; return; }; [ "$environment" != wayfire ] || { echo "Wayfire (wayfire.log)"; return; }; [ "$environment" != hyprland ] || { case "$1" in "$panel") echo "KMS display bridge (kms-bridge.log)";; *) echo "Hyprland (hyprland.log)";; esac; return; }; case "$1" in "$wm") echo "window manager (wm.log)";; "$panel") echo "panel (panel.log)";; "$surface") echo "desktop surface (desktop.log)";; *) echo unknown;; esac; }
+
+component_name() {
+ case "$environment" in
+  plasma) echo "Plasma session (plasma.log)";;
+  xfce) echo "Xfce session (xfce.log)";;
+  lxqt) echo "LXQt session (lxqt.log)";;
+  enlightenment) echo "Enlightenment (enlightenment.log)";;
+  wayfire|hyprland|phosh)
+   case "$1" in "$panel") echo "KMS display bridge (kms-bridge.log)";; *) echo "$environment ($environment.log)";; esac;;
+  *) case "$1" in "$wm") echo "window manager (wm.log)";; "$panel") echo "panel (panel.log)";; "$surface") echo "desktop surface (desktop.log)";; *) echo unknown;; esac;;
+ esac
+}
+output_scale=$(cat "$session/output-scale" 2>/dev/null || echo 1)
+case "$output_scale" in 1|2|3) ;; *) echo 'DESKTOP_STARTUP: invalid interface scale'; exit 2;; esac
+
 cleanup() { trap - EXIT; for pid in "$surface" "$panel" "$wm" "$conf"; do [ -z "$pid" ] || kill "$pid" 2>/dev/null || true; done; }
 trap cleanup EXIT
 if [ "$environment" = plasma ]; then
@@ -221,8 +236,8 @@ elif [ "$environment" = enlightenment ]; then
  integrated=1
  enlightenment_start > "$session/enlightenment.log" 2>&1 & wm=$!; panel=$wm; surface=$wm; limit=600
  echo "DESKTOP_STARTUP: environment=enlightenment session=$wm"
-elif [ "$environment" = wayfire ]; then
- # Wayfire requires a GLES renderer on KMS with either viewer.
+elif [ "$environment" = wayfire ] || [ "$environment" = phosh ]; then
+ # Phoc and Wayfire share the KMS device and viewer bridge.
  export XDG_CURRENT_DESKTOP=Wayfire XDG_SESSION_TYPE=wayland DESKTOP_SESSION=wayfire
  export WLR_BACKENDS=drm WLR_RENDERER=gles2 LIBSEAT_BACKEND=seatd WLR_NO_HARDWARE_CURSORS=1
  # GTK 4 clients (wf-shell) draw in software: Mesa's EGL Wayland platform
@@ -230,6 +245,7 @@ elif [ "$environment" = wayfire ]; then
  # GPU to hand their buffers to anyway.
  export GSK_RENDERER=cairo
  export GTK_THEME=${GTK_THEME:-Adwaita:dark}
+ if [ "$environment" = wayfire ]; then
  wf_config="${XDG_CONFIG_HOME:-$HOME/.config}"
  if mkdir -p "$wf_config" && [ ! -e "$wf_config/wayfire.ini" ] && [ ! -L "$wf_config/wayfire.ini" ]; then
   # First start of an account: dark borders, short fades (cheap in software),
@@ -276,6 +292,7 @@ WAYFIRE_INI
   {print}
   END {if(!found) print "\n[autostart]\nlinuxrunner_session_environment = " command}
  ' "$wf_config/wayfire.ini" > "$wf_config/wayfire.ini.new" && mv "$wf_config/wayfire.ini.new" "$wf_config/wayfire.ini"
+ fi
  # Select the KMS device for the available renderer.
  output=Virtual-1
  if [ -c /dev/dri/card1 ] && [ -S /run/seatd.sock ] && command -v gcc >/dev/null; then
@@ -283,16 +300,20 @@ WAYFIRE_INI
   export WLR_DRM_DEVICES=/dev/dri/card1
   wf_renderer=virgl
  else
-  [ -c /dev/dri/card0 ] && [ -S /run/seatd.sock ] || { echo 'DESKTOP_STARTUP: Wayfire requires KMS and seatd'; exit 127; }
+  [ -c /dev/dri/card0 ] && [ -S /run/seatd.sock ] || { echo "DESKTOP_STARTUP: $environment requires KMS and seatd"; exit 127; }
   export WLR_DRM_DEVICES=/dev/dri/card0 MESA_LOADER_DRIVER_OVERRIDE=kms_swrast GALLIUM_DRIVER=softpipe LIBGL_ALWAYS_SOFTWARE=1
   wf_renderer=softpipe
+  if [ "$environment" = phosh ]; then
+   export WLR_RENDERER=pixman
+   wf_renderer=pixman
+  fi
  fi
- echo "DESKTOP_STARTUP: wayfire renderer=$wf_renderer"
+ echo "DESKTOP_STARTUP: $environment renderer=$wf_renderer"
  # The output always follows the session size (Settings › Display, the TV).
  geometry=$(xwininfo -root 2>/dev/null | awk '/-geometry/{split($2,g,"+"); print g[1]}')
- if [ -n "$geometry" ]; then
+ if [ "$environment" = wayfire ] && [ -n "$geometry" ]; then
   awk '/^\[output:(X11-1|Virtual-1)\]/{skip=1;next} /^\[/{skip=0} !skip' "$wf_config/wayfire.ini" > "$wf_config/wayfire.ini.new" &&
-   printf '\n[output:%s]\n# Managed by LinuxRunner: the session display size.\nmode = %s\n' "$output" "$geometry" >> "$wf_config/wayfire.ini.new" &&
+   printf '\n[output:%s]\n# Managed by LinuxRunner: the session display size.\nmode = %s\nscale = %s\n' "$output" "$geometry" "$output_scale" >> "$wf_config/wayfire.ini.new" &&
    mv "$wf_config/wayfire.ini.new" "$wf_config/wayfire.ini"
  fi
  integrated=1
@@ -303,9 +324,16 @@ WAYFIRE_INI
  bridge="$bridge_dir/lr-kms-bridge-$(sha256sum lr-kms-bridge.c | cut -c1-16)"
  if [ ! -x "$bridge" ]; then
   mkdir -p "$bridge_dir" && gcc -O2 lr-kms-bridge.c -lX11 -lXext -lwayland-client -lxkbcommon -o "$bridge.new" && mv "$bridge.new" "$bridge" ||
-   { echo 'DESKTOP_STARTUP: wayfire bridge build failed'; exit 127; }
+   { echo "DESKTOP_STARTUP: $environment bridge build failed"; exit 127; }
  fi
- wayfire > "$session/wayfire.log" 2>&1 & wm=$!; surface=$wm
+ if [ "$environment" = phosh ]; then
+  export XDG_CURRENT_DESKTOP=Phosh:GNOME DESKTOP_SESSION=phosh
+  export PHOC_DEBUG=disable-animations
+  printf '[core]\nxwayland=true\n[output:Virtual-1]\nmode=%s\nscale=%s\n' "$geometry" "$output_scale" > "$session/phoc.ini"
+  # Shell mode draws a startup spinner that can starve the idle session launch.
+  phoc -C "$session/phoc.ini" -E "/bin/sh '$PWD/phosh-session.sh'" > "$session/phosh.log" 2>&1 & wm=$!
+ else wayfire > "$session/wayfire.log" 2>&1 & wm=$!; fi
+ surface=$wm
  start_panel() {
   ( i=0
    until socket=$(ls "$XDG_RUNTIME_DIR" 2>/dev/null | grep -m1 '^wayland-[0-9]*$') && [ -S "$XDG_RUNTIME_DIR/$socket" ]; do
@@ -318,7 +346,7 @@ WAYFIRE_INI
  }
  start_panel
  limit=600
- echo "DESKTOP_STARTUP: environment=wayfire session=$wm output=${geometry:-unknown} renderer=$wf_renderer"
+ echo "DESKTOP_STARTUP: environment=$environment session=$wm output=${geometry:-unknown} renderer=$wf_renderer"
 elif [ "$environment" = hyprland ]; then
  # Hyprland draws (GLES on llvmpipe, no GPU) to LinuxRunner's software KMS
  # device through seatd; lr-kms-bridge shows that output in this X server's
@@ -399,7 +427,7 @@ elif [ "$environment" = hyprland ]; then
  echo "DESKTOP_STARTUP: hyprland effects=$effects_profile device=${AQ_DRM_DEVICES:-software}"
  if [ -e "$lua" ]; then
   awk '/^-- LinuxRunner (display|effects|session) \(managed\) begin/{skip=1} !skip; /^-- LinuxRunner (display|effects|session) \(managed\) end/{skip=0}' "$lua" > "$lua.new" && {
-   if [ -n "$geometry" ]; then printf -- '-- LinuxRunner display (managed) begin\nhl.monitor({ output = "Virtual-1", mode = "%s@60", position = "0x0", scale = 1 })\n-- LinuxRunner display (managed) end\n' "$geometry"; fi
+   if [ -n "$geometry" ]; then printf -- '-- LinuxRunner display (managed) begin\nhl.monitor({ output = "Virtual-1", mode = "%s@60", position = "0x0", scale = %s })\n-- LinuxRunner display (managed) end\n' "$geometry" "$output_scale"; fi
    printf -- '-- LinuxRunner effects (managed) begin\n%s\n-- LinuxRunner effects (managed) end\n' "$effects"
    printf -- '-- LinuxRunner session (managed) begin\nhl.on("hyprland.start", function() hl.exec_cmd("/bin/sh %s/publish-wayland-env.sh") end)\n-- LinuxRunner session (managed) end\n' "$PWD"
   } >> "$lua.new" && mv "$lua.new" "$lua"
@@ -492,9 +520,9 @@ write_degraded() {
 supervise() {
  # Desktops that are one process tree end with it; Hyprland's display bridge
  # alone is restarted (a few times) while Hyprland runs.
- case "$environment" in plasma|lxqt|enlightenment|wayfire|hyprland)
+ case "$environment" in plasma|lxqt|enlightenment|wayfire|hyprland|phosh)
   kill -0 "$wm" 2>/dev/null || { echo "$1: component_exited name=$(component_name "$wm") pid=$wm"; exit 1; }
-  if { [ "$environment" = hyprland ] || [ "$environment" = wayfire ]; } && [ -n "$panel" ] && ! kill -0 "$panel" 2>/dev/null; then
+  if { [ "$environment" = hyprland ] || [ "$environment" = wayfire ] || [ "$environment" = phosh ]; } && [ -n "$panel" ] && ! kill -0 "$panel" 2>/dev/null; then
    bridge_restarts=$((${bridge_restarts:-0} + 1))
    if [ "$bridge_restarts" -gt 5 ]; then echo "$1: component_failed name=$(component_name "$panel")"; panel=; failed="panel"; write_degraded
    else echo "$1: component_restarted name=$(component_name "$panel") attempt=$bridge_restarts/5"; sleep 1; start_panel; fi
@@ -535,14 +563,10 @@ nested_output_mapped() {
 }
 desktop_ready() {
  ./desktop-probe > "$session/desktop-state.probe" || return 1
- # KMS compositors (Hyprland; Wayfire on the GPU) are ready when the bridge has
- # presented a real frame from them, not when its window is mapped; Wayfire
- # nested in X when its own output window is mapped.
- case "$environment" in
-  hyprland) ! grep -q 'KMS_BRIDGE: first frame' "$session/kms-bridge.log" 2>/dev/null || echo wm=1 >> "$session/desktop-state.probe";;
-  wayfire) if [ "${wf_gpu:-0}" = 1 ]; then ! grep -q 'KMS_BRIDGE: first frame' "$session/kms-bridge.log" 2>/dev/null || echo wm=1 >> "$session/desktop-state.probe"
-           else ! nested_output_mapped || echo wm=1 >> "$session/desktop-state.probe"; fi;;
- esac
+ case "$environment" in phosh)
+  gdbus call --session --dest org.freedesktop.DBus --object-path /org/freedesktop/DBus --method org.freedesktop.DBus.NameHasOwner org.gnome.Shell 2>/dev/null | grep -q true || return 1
+  ! nested_output_mapped || echo wm=1 >> "$session/desktop-state.probe";;
+ wayfire|hyprland) ! nested_output_mapped || echo wm=1 >> "$session/desktop-state.probe";; esac
  awk -F= -v failed=" $failed " -v integrated="$integrated" '{ v[$1] = $2 }
   END { complete = v["wm"] + 0 > 0 && (integrated || (v["panel"] + 0 > 0 && v["surface"] + 0 > 0)) && failed == "  "; ok = v["wm"] + 0 > 0 && (integrated || ((v["panel"] + 0 > 0 || index(failed, " panel ")) && (v["surface"] + 0 > 0 || index(failed, " surface "))))
         if (v["root_geometry"] != "") printf "root_geometry=%s\npanel_geometry=%s\nsurface_geometry=%s\n", v["root_geometry"], v["panel_geometry"], v["surface_geometry"];

@@ -601,6 +601,7 @@
         @"-LinuxRunnerDesktop.metalPresentation", environment[@"LR_WAYLAND_TEST_PRESENTATION"] ?: @"NO"];
     NSString *clipboard = environment[@"LR_WAYFIRE_TEST_CLIPBOARD"];
     if (clipboard.length) app.launchEnvironment = @{@"LR_SIM_SCRIPT": @"wait:300", @"LR_SIM_CLIPBOARD_PATH": clipboard};
+    [app terminate];
     [app launch];
     XCTAssertTrue([app.buttons[@"Open Desktop"] waitForExistenceWithTimeout:60]);
     [app.buttons[@"Open Desktop"] tap];
@@ -687,6 +688,85 @@
     XCTAssertEqual([keys numberOfMatchesInString:afterLimit options:0 range:NSMakeRange(0,afterLimit.length)],
                    [keys numberOfMatchesInString:events options:0 range:NSMakeRange(0,events.length)]);
     [app.buttons[@"GUI Close"] tap];
+}
+- (void)testPhoshSimulatorMobile {
+    NSDictionary *environment = NSProcessInfo.processInfo.environment;
+    XCTSkipIf(![environment[@"LR_WAYLAND_TEST_DESKTOP"] isEqual:@"phosh"], @"Select a prepared Phosh test environment.");
+    self.continueAfterFailure = NO;
+    XCUIDevice.sharedDevice.orientation = UIDeviceOrientationPortrait;
+    XCUIApplication *app = [self openWayfireAtResolution:@"5"];
+    XCTAssertTrue([self waitForRenderedText:@"Search apps" app:app timeout:120]);
+    if([environment[@"LR_PHOSH_TEST_KEYBOARD"] isEqual:@"linux"]){
+        [app.buttons[@"Desktop"] tap];
+        [app.buttons[@"Desktop Settings…"] tap];
+        XCTAssertTrue([app.buttons[@"Display & Gestures"] waitForExistenceWithTimeout:10]);
+        [app.buttons[@"Display & Gestures"] tap];
+        [app.buttons[@"Phosh keyboard"] tap];
+        [app.buttons[@"Linux Keyboard"] tap];
+        [app terminate];
+        app=[self openWayfireAtResolution:@"5"];
+        XCTAssertTrue([self waitForRenderedText:@"Search apps" app:app timeout:120]);
+    }
+    [app.buttons[@"Desktop"] tap];
+    [app.buttons[@"Desktop Settings…"] tap];
+    XCTAssertTrue([app.buttons[@"Full Screen"] waitForExistenceWithTimeout:10]);
+    [app.buttons[@"Full Screen"] tap];
+    XCUIElement *restore=app.buttons[@"Show Desktop Controls"];
+    XCTAssertTrue([restore waitForExistenceWithTimeout:10]);
+    XCUIElement *surface=[[app descendantsMatchingType:XCUIElementTypeAny] matchingIdentifier:@"Linux GUI surface"].firstMatch;
+    XCTAssertFalse(CGRectIntersectsRect(restore.frame,surface.frame));
+    XCTAssertGreaterThanOrEqual(surface.frame.size.width, app.frame.size.width-2);
+    unsigned width=0,height=0;
+    XCTAssertEqual(sscanf([[surface.value description] UTF8String],"%ux%u",&width,&height),2);
+    XCTAssertGreaterThan(height,0u);
+    XCTAssertEqualWithAccuracy((double)width/height,surface.frame.size.width/surface.frame.size.height,.003);
+    [self shot:app name:@"Phosh full native canvas and status bar"];
+    if([environment[@"LR_PHOSH_TEST_KEYBOARD"] isEqual:@"linux"]){
+        [[surface coordinateWithNormalizedOffset:CGVectorMake(.3,.09)] tap];
+        XCTAssertTrue([self waitForRenderedText:@"123" app:app timeout:30]);
+        XCTAssertFalse(app.keyboards.firstMatch.exists);
+        [self shot:app name:@"Phosh Linux screen keyboard"];
+        [restore tap];
+    }else{
+        [restore tap];
+        [app.buttons[@"GUI Keyboard"] tap];
+        XCTAssertTrue([app.keyboards.firstMatch waitForExistenceWithTimeout:10]);
+        [app.buttons[@"GUI Keyboard"] tap];
+    }
+    XCUIDevice.sharedDevice.orientation = UIDeviceOrientationLandscapeLeft;
+    [NSThread sleepForTimeInterval:3];
+    [self shot:app name:@"Phosh landscape viewer"];
+    XCUIDevice.sharedDevice.orientation = UIDeviceOrientationPortrait;
+    [self showWayfireControls:app];
+    NSString *visibleText=[environment[@"LR_PHOSH_TEST_KEYBOARD"] isEqual:@"linux"]?@"123":@"Search apps";
+    XCTAssertTrue([self waitForRenderedText:visibleText app:app timeout:30]);
+    [app.navigationBars.buttons[@"Done"] tap];
+    [app.buttons[@"Open Desktop"] tap];
+    [self waitForWayfireDesktop:app];
+    XCTAssertTrue([self waitForRenderedText:visibleText app:app timeout:30]);
+}
+- (void)testPhoshDefaultApplications {
+    NSDictionary *environment=NSProcessInfo.processInfo.environment;
+    XCTSkipIf(![environment[@"LR_WAYLAND_TEST_DESKTOP"] isEqual:@"phosh"], @"Select a prepared Phosh test environment.");
+    self.continueAfterFailure=NO;
+    XCUIDevice.sharedDevice.orientation=UIDeviceOrientationPortrait;
+    XCUIApplication *app=[self openWayfireAtResolution:@"5"];
+    XCTAssertTrue([self waitForRenderedText:@"Search apps" app:app timeout:120]);
+    [app.buttons[@"Desktop"] tap];
+    [app.buttons[@"Desktop Settings…"] tap];
+    [app.buttons[@"Full Screen"] tap];
+    XCUIElement *surface=[[app descendantsMatchingType:XCUIElementTypeAny] matchingIdentifier:@"Linux GUI surface"].firstMatch;
+    [[surface coordinateWithNormalizedOffset:CGVectorMake(.125,.17)] tap];
+    [NSThread sleepForTimeInterval:8];
+    [self showWayfireControls:app];
+    [self pasteWayfireText:@"printf 'CONSOLE READY\\n'\n" app:app];
+    XCTAssertTrue([self waitForRenderedText:@"CONSOLE READY" app:app timeout:60]);
+    [app.buttons[@"Desktop"] tap];
+    [app.buttons[@"Desktop Settings…"] tap];
+    [app.buttons[@"Full Screen"] tap];
+    [[surface coordinateWithNormalizedOffset:CGVectorMake(.4,.3)] tap];
+    XCTAssertTrue([self waitForRenderedText:@"123" app:app timeout:30]);
+    [self shot:app name:@"Phosh Console with larger terminal keyboard"];
 }
 - (void)testWayfireResolutionMatrix {
     NSString *root = NSProcessInfo.processInfo.environment[@"LR_WAYFIRE_TEST_ROOT"];

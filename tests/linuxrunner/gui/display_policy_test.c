@@ -28,11 +28,17 @@ int main(void) {
     assert(lr_desktop_resolution(-1,true,false)==4);
     assert(lr_desktop_resolution(3,true,false)==4);
     assert(lr_desktop_resolution(3,true,true)==3);
-    for(int i=0;i<=4;i++) {
+    for(int i=0;i<=5;i++) {
         assert(lr_desktop_resolution(i,false,false)==(unsigned)i);
         assert(lr_desktop_resolution(i,true,true)==(unsigned)i);
         if(i!=3)assert(lr_desktop_resolution(i,true,false)==(unsigned)i);
     }
+    lr_native_desktop_geometry(1206,2622,&w,&h);assert(w==1206&&h==2622);
+    lr_native_desktop_geometry(2622,1206,&w,&h);assert(w==2622&&h==1206);
+    lr_native_desktop_geometry(2752,2064,&w,&h);assert(w==2752&&h==2064);
+    lr_native_desktop_geometry(7680,4320,&w,&h);assert(lr_display_dimensions(w,h)&&w%2==0&&h%2==0);
+    lr_native_desktop_geometry(NAN,100,&w,&h);assert(w==960&&h==540);
+    assert(!lr_display_dimensions(4096,4096)&&!lr_display_dimensions(4097,1));
     double x=640,y=360;
     assert(lr_touchpad_move(&x,&y,100,40,1280,720)&&x==790&&y==420);
     assert(lr_touchpad_move(&x,&y,10000,10000,1280,720)&&x==1279&&y==719);

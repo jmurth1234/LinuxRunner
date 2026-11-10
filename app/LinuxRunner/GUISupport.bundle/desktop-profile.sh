@@ -29,6 +29,25 @@ wayfire_available() {
     for program in wayfire wf-panel foot seatd Xwayland; do have "$program" || return 1; done
     pkg-config --exists xext wayland-client xkbcommon 2>/dev/null
 }
+phosh_schema_available() {
+    phosh_schemas=$(gsettings list-schemas 2>/dev/null) || return 1
+    printf '%s\n' "$phosh_schemas" | grep -qx 'org.gnome.settings-daemon.peripherals.touchscreen'
+}
+phosh_available() {
+    test -x /usr/libexec/phosh && phosh_schema_available || return 1
+    for program in phoc squeekboard foot seatd Xwayland gsettings; do have "$program" || return 1; done
+    pkg-config --exists xext wayland-client xkbcommon 2>/dev/null
+}
+phosh_apps_available() {
+    for package in firefox-esr portfolio-filemanager gnome-text-editor gnome-calculator eog gnome-console; do
+        [ "$(dpkg-query -W -f='${Status}' "$package" 2>/dev/null)" = 'install ok installed' ] || return 1
+    done
+}
+install_phosh_apps() {
+    phosh_apps_available && return 0
+    install_packages "Phosh default applications" firefox-esr portfolio-filemanager gnome-text-editor gnome-calculator eog gnome-console || support_fail PROFILE phosh-apps
+    phosh_apps_available || support_fail PROFILE phosh-apps-missing
+}
 helper_key() { { cat support-version; sha256sum "$@"; } | sha256sum | awk '{print $1}'; }
 
 gui_missing() {
@@ -83,6 +102,8 @@ check() {
     missing= optional= helpers_stale=0
     gui_helpers_stale && helpers_stale=1
     if gui_missing || [ "$helpers_stale" = 1 ]; then missing=gui; fi
+    if [ -x /usr/libexec/phosh ] && ! phosh_schema_available; then missing=${missing:+$missing,}phosh; fi
+    if [ -x /usr/libexec/phosh ] && ! phosh_apps_available; then missing=${missing:+$missing,}phosh-apps; fi
     if desktop_missing; then missing=${missing:+$missing,}desktop; fi
     # Executables can survive a failed RPM transaction while a required
     # dependency is absent. Do not turn that partial installation into ready.
@@ -111,6 +132,7 @@ check() {
       if have enlightenment_start && have terminology; then echo enlightenment=installed; else echo enlightenment=missing; fi
       if wayfire_available; then echo wayfire=installed; else echo wayfire=missing; fi
       if have Hyprland && have waybar && have fuzzel && have seatd && have Xwayland; then echo hyprland=installed; else echo hyprland=missing; fi
+      if phosh_available; then echo phosh=installed; else echo phosh=missing; fi
       # Startup timeline: real initialization state, independent of package history.
       if [ "$distro" = fedora ] || [ -e /usr/lib/linuxrunner/initialize-debian.sh ] || [ -e /usr/lib/linuxrunner/initialize-arch.sh ]; then
           if [ -f /var/lib/linuxrunner/initialized ] && { [ "$distro" != fedora ] || have awk; }; then echo first-start=done; else echo first-start=pending; fi
@@ -319,6 +341,10 @@ repair() {
     if [ "$want_accounts" = accounts ] && accounts_missing; then
         install_packages "account tools" passwd -- shadow -- shadow -- shadow-utils || support_fail PROFILE account-tools
     fi
+    if [ -x /usr/libexec/phosh ] && ! phosh_schema_available; then
+        install_packages "Phosh settings schemas" gnome-settings-daemon-common || support_fail PROFILE phosh-settings
+    fi
+    if [ -x /usr/libexec/phosh ]; then install_phosh_apps; fi
     stage "Checking"
     check
     case "$(head -n 1 profile-check.result)" in ready) echo 'PROFILE: result=PASS';; *) support_fail PROFILE "still-$(head -n 1 profile-check.result)";; esac
@@ -437,6 +463,15 @@ case "$mode" in
         fi
         dpkg-query -W -f='${Status}' kali-linux-default 2>/dev/null | grep -q 'install ok installed' || support_fail PROFILE kali-tools-missing
         echo 'PROFILE: kali-tools=PASS';;
+    phosh)
+        [ "$distro" = debian ] || support_fail PROFILE phosh-needs-debian
+        repair "${2:-}"
+        if ! phosh_available; then
+            install_packages "Phosh mobile desktop" phosh phoc squeekboard foot seatd xwayland libxext-dev libwayland-dev libxkbcommon-dev libglib2.0-bin librsvg2-common fonts-cantarell gnome-settings-daemon-common || support_fail PROFILE phosh-packages
+        fi
+        install_phosh_apps
+        phosh_available || support_fail PROFILE phosh-missing
+        echo 'PROFILE: phosh=PASS';;
     hyprland)
         # Hyprland on LinuxRunner's software KMS device (llvmpipe, no GPU), with
         # Waybar, the fuzzel launcher, the foot terminal and seatd. Arch Linux

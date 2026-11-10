@@ -1,6 +1,7 @@
 // Included by drm.c; deliberately independent of guest task state. The host
 // never keeps a pointer into a compositor-owned buffer after flip completion.
 #include "fs/kms_display.h"
+#include "fs/display_geometry.h"
 #include <pthread.h>
 #include <stdlib.h>
 #include <string.h>
@@ -33,7 +34,7 @@ static bool lr_kms_display_active(void) {
 }
 // Called with kms.lock held, before the guest is told it may reuse scanout.
 static void lr_kms_display_publish(const void *pixels, uint32_t w, uint32_t h, uint32_t pitch) {
-    if (!pixels || !w || !h || w > 2560 || h > 1600 || pitch < w * 4) return;
+    if (!pixels || !lr_display_dimensions(w, h) || pitch < w * 4 || (uint64_t)pitch * h > SIZE_MAX) return;
     pthread_mutex_lock(&display.lock);
     if (display.token) {
         size_t bytes = (size_t)w * h * 4;

@@ -153,6 +153,8 @@ void LRSetDatalessMaterialization(void);
 + (BOOL)enlightenmentInstalled;
 + (void)installWayfire:(void (^)(NSString *stage))progress completion:(void (^)(NSError * _Nullable error))completion;
 + (BOOL)wayfireInstalled;
++ (void)installPhosh:(void (^)(NSString *stage))progress completion:(void (^)(NSError * _Nullable error))completion;
++ (BOOL)phoshInstalled;
 + (void)installHyprland:(void (^)(NSString *stage))progress completion:(void (^)(NSError * _Nullable error))completion;
 + (BOOL)hyprlandInstalled;
 /// True while a support installation (account tools, desktop, KDE) runs; a
